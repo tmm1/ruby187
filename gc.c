@@ -297,8 +297,6 @@ rb_gc_unregister_address(addr)
     }
 }
 
-#undef GC_DEBUG
-
 void
 rb_global_variable(var)
     VALUE *var;
@@ -333,10 +331,8 @@ typedef struct RVALUE {
 	struct RVarmap varmap;
 	struct SCOPE   scope;
     } as;
-#ifdef GC_DEBUG
     char *file;
     int   line;
-#endif
 } RVALUE;
 
 #if defined(_MSC_VER) || defined(__BORLANDC__) || defined(__CYGWIN__)
@@ -354,6 +350,22 @@ static struct heaps_slot {
 } *heaps;
 static int heaps_length = 0;
 static int heaps_used   = 0;
+
+struct heaps_slot *
+rb_gc_heap_slots()
+{
+    return heaps;
+}
+
+int
+rb_gc_heaps_used() {
+    return heaps_used;
+}
+
+int
+rb_gc_heaps_length() {
+    return heaps_length;
+}
 
 #define HEAP_MIN_SLOTS 10000
 static int heap_slots = HEAP_MIN_SLOTS;
@@ -438,10 +450,12 @@ rb_newobj()
     obj = (VALUE)freelist;
     freelist = freelist->as.free.next;
     MEMZERO((void*)obj, RVALUE, 1);
-#ifdef GC_DEBUG
-    RANY(obj)->file = ruby_sourcefile;
-    RANY(obj)->line = ruby_sourceline;
-#endif
+
+    if (ruby_current_node && ruby_current_node->nd_file) {
+      RANY(obj)->file = ruby_current_node->nd_file;
+      RANY(obj)->line = nd_line(ruby_current_node);
+    }
+
     return obj;
 }
 
@@ -773,6 +787,9 @@ gc_mark(ptr, lev)
     if (obj->as.basic.flags == 0) return;       /* free cell */
     if (obj->as.basic.flags & FL_MARK) return;  /* already marked */
     obj->as.basic.flags |= FL_MARK;
+
+    /* mark our new reference point for sourcefile objects */
+    mark_source_filename(RANY(obj)->file);
 
     if (lev > GC_LEVEL_MAX || (lev == 0 && ruby_stack_check())) {
 	if (!mark_stack_overflow) {

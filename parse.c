@@ -11403,6 +11403,11 @@ symbols_i(key, value, ary)
  *                                     :wait2, :$>]
  */
 
+struct st_table *
+rb_parse_sym_tbl() {
+  return sym_tbl;
+}
+
 VALUE
 rb_sym_all_symbols()
 {
