@@ -6110,6 +6110,7 @@ rb_call(klass, recv, mid, argc, argv, scope, self)
     struct cache_entry *ent;
 
     if (!klass) {
+            return Qnil;
 	rb_raise(rb_eNotImpError, "method `%s' called on terminated object (0x%lx)",
 		 rb_id2name(mid), recv);
     }

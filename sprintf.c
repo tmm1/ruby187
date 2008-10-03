@@ -846,3 +846,41 @@ fmt_setup(buf, c, flags, width, prec)
     *buf++ = c;
     *buf = '\0';
 }
+
+#undef FILE
+#define FILE rb_printf_buffer
+#define __sbuf rb_printf_sbuf
+#define __sFILE rb_printf_sfile
+#undef feof
+#undef ferror
+#undef clearerr
+#undef fileno
+#if SIZEOF_LONG < SIZEOF_VOIDP
+# if  SIZEOF_LONG_LONG == SIZEOF_VOIDP
+#  define _HAVE_SANE_QUAD_
+#  define _HAVE_LLP64_
+#  define quad_t LONG_LONG
+#  define u_quad_t unsigned LONG_LONG
+# endif
+#endif
+#undef vsnprintf
+#undef snprintf
+#include "missing/vsnprintf.c"
+
+VALUE
+rb_sprintf(const char *format, ...)
+{
+    VALUE result;
+    va_list ap;
+    char *str;
+
+    va_start(ap, format);
+    vasprintf(&str, format, ap);
+    va_end(ap);
+
+    printf("STRING: %s\n", str);
+    result = rb_str_new2(str);
+    free(str);
+
+    return result;
+}

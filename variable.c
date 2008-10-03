@@ -458,6 +458,13 @@ readonly_setter(val, id, var)
     rb_name_error(id, "%s is a read-only variable", rb_id2name(id));
 }
 
+#ifdef DEBUG_REACHABILITY
+extern VALUE rb_reach_test_path;
+#define IF_DEBUG_REACHABILITY(does) do {if (!NIL_P(rb_reach_test_path)) {does;}} while (0)
+#else
+#define IF_DEBUG_REACHABILITY(does)
+#endif
+
 static int
 mark_global_entry(key, entry)
     ID key;
@@ -465,11 +472,25 @@ mark_global_entry(key, entry)
 {
     struct trace_var *trace;
     struct global_variable *var = entry->var;
+#ifdef DEBUG_REACHABILITY
+    int i = 0;
+#endif
 
+    IF_DEBUG_REACHABILITY(
+	rb_ary_push(rb_reach_test_path,
+		    rb_sprintf("Ruby global %s", rb_id2name(key))));
     (*var->marker)(var->data);
+    IF_DEBUG_REACHABILITY(rb_ary_pop(rb_reach_test_path));
+
     trace = var->trace;
     while (trace) {
-	if (trace->data) rb_gc_mark_maybe(trace->data);
+	if (trace->data) {
+	    IF_DEBUG_REACHABILITY(
+		rb_ary_push(rb_reach_test_path,
+			    rb_sprintf("Ruby global %s trace %d", rb_id2name(key), i++)));
+	    rb_gc_mark_maybe(trace->data);
+	    IF_DEBUG_REACHABILITY(rb_ary_pop(rb_reach_test_path));
+	}
 	trace = trace->next;
     }
     return ST_CONTINUE;

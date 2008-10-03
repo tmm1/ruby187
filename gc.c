@@ -74,7 +74,12 @@ static unsigned long malloc_increase = 0;
 static unsigned long malloc_limit = GC_MALLOC_LIMIT;
 static void run_final();
 static VALUE nomem_error;
+#ifdef DEBUG_REACHABILITY
+static VALUE garbage_collect0 _((VALUE));
+#define garbage_collect() garbage_collect0(0)
+#else
 static void garbage_collect();
+#endif
 
 int ruby_gc_stress = 0;
 
@@ -761,16 +766,56 @@ rb_gc_mark_maybe(obj)
 
 #define GC_LEVEL_MAX 250
 
+#ifdef DEBUG_REACHABILITY
+VALUE rb_reach_test_obj      = Qnil;
+VALUE rb_reach_test_result   = Qnil;
+VALUE rb_reach_test_path     = Qnil;
+
+static void
+rb_gc_unmark()
+{
+    RVALUE *p, *pend;
+    int i, used = heaps_used;
+
+    for (i = 0; i < used; i++) {
+	p = heaps[i].slot; pend = p + heaps[i].limit;
+	while (p < pend) {
+	    RBASIC(p)->flags &= ~FL_MARK;
+	    p++;
+	}
+    }
+}
+#endif
+
 static void
 gc_mark(ptr, lev)
     VALUE ptr;
     int lev;
 {
     register RVALUE *obj;
+#ifdef DEBUG_REACHABILITY
+    long saved_len = 0;
+    VALUE inspect = rb_intern("inspect");
+#endif
 
     obj = RANY(ptr);
     if (rb_special_const_p(ptr)) return; /* special const not marked */
     if (obj->as.basic.flags == 0) return;       /* free cell */
+#ifdef DEBUG_REACHABILITY
+    if (!NIL_P(rb_reach_test_obj) &&
+        (obj->as.basic.flags & T_MASK) != T_NODE) {
+	saved_len = RARRAY(rb_reach_test_path)->len;
+	if ((VALUE)obj == rb_reach_test_obj) {
+	    rb_warn("  ...found, after %ld steps!", saved_len);
+	    rb_ary_push(rb_reach_test_result,
+			rb_ary_dup(rb_reach_test_path));
+	    
+	}
+	else if (!(obj->as.basic.flags & FL_MARK)) {
+	    rb_ary_push(rb_reach_test_path, (VALUE)obj);
+	}
+    }
+#endif
     if (obj->as.basic.flags & FL_MARK) return;  /* already marked */
     obj->as.basic.flags |= FL_MARK;
 
@@ -787,6 +832,11 @@ gc_mark(ptr, lev)
 	return;
     }
     gc_mark_children(ptr, lev+1);
+#ifdef DEBUG_REACHABILITY
+    if (!NIL_P(rb_reach_test_path)) {
+	RARRAY(rb_reach_test_path)->len = saved_len;
+    }
+#endif
 }
 
 void
@@ -1369,9 +1419,25 @@ int rb_setjmp (rb_jmp_buf);
 #endif /* __human68k__ or DJGPP */
 #endif /* __GNUC__ */
 
+#ifdef DEBUG_REACHABILITY
+#define IF_DEBUG_REACHABILITY(does) if (obj) {does;}
+#else
+#define IF_DEBUG_REACHABILITY(does)
+#endif
+
+#ifdef DEBUG_REACHABILITY
+static VALUE
+garbage_collect0(obj)
+    VALUE obj;
+#else
 static void
 garbage_collect()
+#endif
 {
+#ifdef DEBUG_REACHABILITY
+    int i = 0;
+    VALUE result;
+#endif
     struct gc_list *list;
     struct FRAME * volatile frame; /* gcc 2.7.2.3 -O2 bug??  */
     jmp_buf save_regs_gc_mark;
@@ -1382,40 +1448,84 @@ garbage_collect()
 	rb_bug("cross-thread violation on rb_gc()");
     }
 #endif
-    if (dont_gc || during_gc) {
-	if (!freelist) {
-	    add_heap();
+
+#ifdef DEBUG_REACHABILITY
+    if (obj) {
+	if (!NIL_P(rb_reach_test_obj) ||
+	    !NIL_P(rb_reach_test_result) ||
+	    !NIL_P(rb_reach_test_path)) {
+	    rb_raise(rb_eRuntimeError, "reachability_paths called recursively");
 	}
-	return;
+
+	rb_reach_test_obj    = obj;
+	rb_reach_test_result = rb_ary_new();
+	rb_reach_test_path   = rb_ary_new();
     }
-    if (during_gc) return;
+    else
+#endif
+    {
+    if (dont_gc || during_gc) {
+      if (!freelist) {
+          add_heap();
+      }
+#ifdef DEBUG_REACHABILITY
+      return 0;
+#else
+      return;
+#endif
+    }
     during_gc++;
+    }
 
     init_mark_stack();
 
     gc_mark((VALUE)ruby_current_node, 0);
 
     /* mark frame stack */
+    IF_DEBUG_REACHABILITY(rb_warn("Checking frame stack..."));
     for (frame = ruby_frame; frame; frame = frame->prev) {
+	IF_DEBUG_REACHABILITY(
+	    NODE *node = frame->node;
+	    if (node) {
+		rb_ary_push(rb_reach_test_path,
+			    rb_sprintf("frame %d: %s line %d", i, node->nd_file, nd_line(node)));
+	    });
 	rb_gc_mark_frame(frame);
+	IF_DEBUG_REACHABILITY((rb_ary_pop(rb_reach_test_path), i++));
 	if (frame->tmp) {
 	    struct FRAME *tmp = frame->tmp;
+#ifdef DEBUG_REACHABILITY
+	    int ti = 0;
+#endif
 	    while (tmp) {
+		IF_DEBUG_REACHABILITY(
+		    NODE *node = tmp->node;
+		    if (node) {
+			rb_ary_push(rb_reach_test_path,
+				    rb_sprintf("tmp frame %d: %s line %d",
+					       ti, node->nd_file, nd_line(node)));
+		    });
 		rb_gc_mark_frame(tmp);
+		IF_DEBUG_REACHABILITY((rb_ary_pop(rb_reach_test_path), ti++));
 		tmp = tmp->prev;
 	    }
 	}
     }
+    IF_DEBUG_REACHABILITY(rb_warn("Checking ruby_class..."));
     gc_mark((VALUE)ruby_scope, 0);
+    IF_DEBUG_REACHABILITY(rb_warn("Checking ruby_scope..."));
     gc_mark((VALUE)ruby_dyna_vars, 0);
     if (finalizer_table) {
+	IF_DEBUG_REACHABILITY(rb_warn("Checking finalizer_table..."));
 	mark_tbl(finalizer_table, 0);
     }
 
     FLUSH_REGISTER_WINDOWS;
     /* This assumes that all registers are saved into the jmp_buf (and stack) */
     rb_setjmp(save_regs_gc_mark);
+    IF_DEBUG_REACHABILITY(rb_warn("Checking save_regs_gc_mark..."));
     mark_locations_array((VALUE*)save_regs_gc_mark, sizeof(save_regs_gc_mark) / sizeof(VALUE *));
+    IF_DEBUG_REACHABILITY(rb_warn("Checking stack_start..."));
 #if STACK_GROW_DIRECTION < 0
     rb_gc_mark_locations((VALUE*)STACK_END, rb_gc_stack_start);
 #elif STACK_GROW_DIRECTION > 0
@@ -1435,24 +1545,35 @@ garbage_collect()
     rb_gc_mark_locations((VALUE*)((char*)STACK_END + 2),
 			 (VALUE*)((char*)rb_gc_stack_start + 2));
 #endif
+    IF_DEBUG_REACHABILITY(rb_warn("Checking threads..."));
     rb_gc_mark_threads();
 
     /* mark protected global variables */
+    IF_DEBUG_REACHABILITY(rb_warn("Checking C globals..."));
     for (list = global_List; list; list = list->next) {
+	IF_DEBUG_REACHABILITY(rb_ary_push(rb_reach_test_path, rb_sprintf("C global %d", i)));
 	rb_gc_mark_maybe(*list->varptr);
+	IF_DEBUG_REACHABILITY((rb_ary_pop(rb_reach_test_path), i++));
     }
+    IF_DEBUG_REACHABILITY(rb_warn("Checking end_proc..."));
     rb_mark_end_proc();
+    IF_DEBUG_REACHABILITY(rb_warn("Checking global_tbl..."));
     rb_gc_mark_global_tbl();
 
+    IF_DEBUG_REACHABILITY(rb_warn("Checking class_tbl..."));
     rb_mark_tbl(rb_class_tbl);
+    IF_DEBUG_REACHABILITY(rb_warn("Checking trap_list..."));
     rb_gc_mark_trap_list();
 
     /* mark generic instance variables for special constants */
+    IF_DEBUG_REACHABILITY(rb_warn("Checking generic_ivar_tbl..."));
     rb_mark_generic_ivar_tbl();
 
+    IF_DEBUG_REACHABILITY(rb_warn("Checking mark parser..."));
     rb_gc_mark_parser();
 
     /* gc_mark objects whose marking are not completed*/
+    IF_DEBUG_REACHABILITY(rb_warn("Checking mark stack..."));
     do {
 	while (!MARK_STACK_EMPTY) {
 	    if (mark_stack_overflow){
@@ -1464,6 +1585,20 @@ garbage_collect()
 	}
 	rb_gc_abort_threads();
     } while (!MARK_STACK_EMPTY);
+
+    IF_DEBUG_REACHABILITY(
+	rb_warn("Unmarking...");
+	rb_gc_unmark();
+
+	rb_warn("Done.");
+
+	result = rb_reach_test_result;
+
+        rb_reach_test_obj    = Qnil;
+        rb_reach_test_result = Qnil;
+        rb_reach_test_path   = Qnil;
+
+	return result);
 
     gc_sweep();
 }
@@ -2075,6 +2210,15 @@ rb_obj_id(VALUE obj)
     return (VALUE)((long)obj|FIXNUM_FLAG);
 }
 
+static VALUE
+rbx_reachability_paths(mod, obj)
+    VALUE mod;
+    VALUE obj;
+{
+    if (rb_special_const_p(obj)) return Qnil;
+    return garbage_collect0(obj);
+}
+
 /*
  *  The <code>GC</code> module provides an interface to Ruby's mark and
  *  sweep garbage collection mechanism. Some of the underlying methods
@@ -2092,6 +2236,9 @@ Init_GC()
     rb_define_singleton_method(rb_mGC, "disable", rb_gc_disable, 0);
     rb_define_singleton_method(rb_mGC, "stress", gc_stress_get, 0);
     rb_define_singleton_method(rb_mGC, "stress=", gc_stress_set, 1);
+#ifdef DEBUG_REACHABILITY
+    rb_define_singleton_method(rb_mGC, "reachability_paths", rbx_reachability_paths, 1);
+#endif
     rb_define_method(rb_mGC, "garbage_collect", rb_gc_start, 0);
 
     rb_mObSpace = rb_define_module("ObjectSpace");
@@ -2115,6 +2262,10 @@ Init_GC()
     source_filenames = st_init_strtable();
 
     rb_global_variable(&nomem_error);
+#ifdef DEBUG_REACHABILITY
+    rb_global_variable(&rb_reach_test_result);
+    rb_global_variable(&rb_reach_test_path);
+#endif
     nomem_error = rb_exc_new3(rb_eNoMemError,
 			      rb_obj_freeze(rb_str_new2("failed to allocate memory")));
     OBJ_TAINT(nomem_error);
