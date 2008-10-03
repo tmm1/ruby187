@@ -10761,6 +10761,8 @@ stack_extend(rb_thread_t th, int exit, VALUE *addr_in_prev_frame)
 #endif
 }
 
+static int thread_init;
+
 static void
 rb_thread_restore_context(th, exit)
     rb_thread_t th;
@@ -10801,6 +10803,11 @@ rb_thread_remove(th)
     rb_thread_die(th);
     th->prev->next = th->next;
     th->next->prev = th->prev;
+
+    if (th->next == th->prev && th->next == main_thread) {
+      rb_thread_stop_timer();
+      thread_init = 0;
+    }
 }
 
 static int
@@ -12089,8 +12096,6 @@ rb_thread_alloc(klass)
     }
     return th;
 }
-
-static int thread_init;
 
 #if defined(_THREAD_SAFE)
 static void
