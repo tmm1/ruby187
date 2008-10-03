@@ -501,14 +501,17 @@ static void set_gc_parameters()
 
     gc_heap_file_ptr = getenv("RUBY_GC_DATA_FILE");
     if (gc_heap_file_ptr != NULL) {
-	FILE* data_file = fopen(gc_heap_file_ptr, "w");
+	char *filename;
+	asprintf(&filename, "%s.%ld", gc_heap_file_ptr, (long int)(getpid()));
+	FILE* data_file = fopen(filename, "w");
 	if (data_file != NULL) {
 	    gc_data_file = data_file;
 	}
 	else {
 	    fprintf(stderr,
-		    "can't open gc log file %s for writing, using default\n", gc_heap_file_ptr);
+		    "can't open gc log file %s for writing, using default\n", filename);
 	}
+	free(filename);
     }
 
     min_slots_ptr = getenv("RUBY_HEAP_MIN_SLOTS");
@@ -1731,7 +1734,13 @@ garbage_collect()
         gc_collections++;
 	gettimeofday(&gctv1, NULL);
         if (verbose_gc_stats) {
-	    fprintf(gc_data_file, "Garbage collection started\n");
+	  time_t tmp; 
+	  char c[30];
+    c[29] = '\0';
+	  tmp = time(NULL);
+    ctime_r(&tmp, c);
+	  fprintf(gc_data_file, "===========================\n");
+	   fprintf(gc_data_file, "Garbage collection started at: %s\n", c);
 	}
     }
 
@@ -1818,7 +1827,13 @@ garbage_collect()
 	gc_time += musecs_used;
 
 	if (verbose_gc_stats) {
-	    fprintf(gc_data_file, "GC time: %d msec\n", musecs_used / 1000);
+	  time_t tmp = gctv2.tv_sec;
+	  char c[30];
+    c[29] = '\0';
+    ctime_r(&tmp, c);
+    fprintf(gc_data_file, "GC time: %d msec\n", musecs_used / 1000);
+	  fprintf(gc_data_file, "GC Finished at: %s", c);
+	  fprintf(gc_data_file, "=============================>\n\n\n");
 	}
     }
 }
