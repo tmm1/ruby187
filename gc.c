@@ -30,6 +30,12 @@
 #include <sys/resource.h>
 #endif
 
+#ifdef HAVE_VALGRIND
+#include <valgrind/memcheck.h>
+#else
+#define VALGRIND_MAKE_MEM_DEFINED(p, n) /* empty */
+#endif
+
 #if defined _WIN32 || defined __CYGWIN__
 #include <windows.h>
 #endif
@@ -137,6 +143,9 @@ ruby_xmalloc(size)
     long size;
 {
     void *mem;
+
+    VALGRIND_MAKE_MEM_DEFINED(&malloc_increase, sizeof(malloc_increase));
+    VALGRIND_MAKE_MEM_DEFINED(&malloc_limit, sizeof(malloc_limit));
 
     if (size < 0) {
 	rb_raise(rb_eNoMemError, "negative allocation size (or too big)");
@@ -678,6 +687,9 @@ mark_locations_array(x, n)
     register long n;
 {
     VALUE v;
+
+    VALGRIND_MAKE_MEM_DEFINED(x, sizeof(*x) * n);
+
     while (n--) {
         v = *x;
 	if (is_pointer_to_heap((void *)v)) {
@@ -768,7 +780,10 @@ gc_mark(ptr, lev)
 {
     register RVALUE *obj;
 
+    VALGRIND_MAKE_MEM_DEFINED(&ptr, sizeof(ptr));
     obj = RANY(ptr);
+    VALGRIND_MAKE_MEM_DEFINED(obj, sizeof(*obj));
+
     if (rb_special_const_p(ptr)) return; /* special const not marked */
     if (obj->as.basic.flags == 0) return;       /* free cell */
     if (obj->as.basic.flags & FL_MARK) return;  /* already marked */

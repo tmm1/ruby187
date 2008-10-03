@@ -28,6 +28,12 @@
 #define EXIT_FAILURE 1
 #endif
 
+#ifdef HAVE_VALGRIND
+#include <valgrind/memcheck.h>
+#else
+#define VALGRIND_MAKE_MEM_DEFINED(p, n) /* empty */
+#endif
+
 #include <stdio.h>
 
 #include "st.h"
@@ -5290,6 +5296,9 @@ assign(self, lhs, val, pcall)
     int pcall;
 {
     ruby_current_node = lhs;
+
+    VALGRIND_MAKE_MEM_DEFINED(&val, sizeof(val));
+
     if (val == Qundef) {
 	rb_warning("assigning void value");
 	val = Qnil;

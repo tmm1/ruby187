@@ -34,7 +34,7 @@ RIDATADIR = $(DESTDIR)$(datadir)/ri/$(MAJOR).$(MINOR)/system
 
 empty =
 OUTFLAG = @OUTFLAG@$(empty)
-CFLAGS = @CFLAGS@ @XCFLAGS@ @ARCH_FLAG@
+CFLAGS = @CFLAGS@ @XCFLAGS@ @ARCH_FLAG@ @VALGRIND_CFLAGS@
 cflags = @cflags@
 optflags = @optflags@
 debugflags = @debugflags@
