@@ -80,6 +80,20 @@ int ruby_gc_stress = 0;
 
 NORETURN(void rb_exc_jump _((VALUE)));
 
+static unsigned long live_objects = 0;
+unsigned long rb_os_live_objects()
+{ return live_objects; }
+
+#if defined(HAVE_LONG_LONG)
+static unsigned long long allocated_objects = 0;
+unsigned long long rb_os_allocated_objects()
+{ return allocated_objects; }
+#else
+static unsigned long allocated_objects = 0;
+unsigned long rb_os_allocated_objects()
+{ return allocated_objects; }
+#endif
+
 void
 rb_memerror()
 {
@@ -442,6 +456,8 @@ rb_newobj()
     RANY(obj)->file = ruby_sourcefile;
     RANY(obj)->line = ruby_sourceline;
 #endif
+    live_objects++;
+    allocated_objects++;
     return obj;
 }
 
@@ -1099,6 +1115,7 @@ gc_sweep()
     int i;
     unsigned long live = 0;
     unsigned long free_min = 0;
+    live_objects = 0;
 
     for (i = 0; i < heaps_used; i++) {
         free_min += heaps[i].limit;
@@ -1157,7 +1174,7 @@ gc_sweep()
 	    }
 	    else {
 		RBASIC(p)->flags &= ~FL_MARK;
-		live++;
+		live_objects++;
 	    }
 	    p++;
 	}
@@ -1175,7 +1192,7 @@ gc_sweep()
 	}
     }
     if (malloc_increase > malloc_limit) {
-	malloc_limit += (malloc_increase - malloc_limit) * (double)live / (live + freed);
+	malloc_limit += (malloc_increase - malloc_limit) * (double)live_objects / (live_objects + freed);
 	if (malloc_limit < GC_MALLOC_LIMIT) malloc_limit = GC_MALLOC_LIMIT;
     }
     malloc_increase = 0;
@@ -2075,6 +2092,35 @@ rb_obj_id(VALUE obj)
     return (VALUE)((long)obj|FIXNUM_FLAG);
 }
 
+/* call-seq:
+ *  ObjectSpace.live_objects => number
+ *
+ * Returns the count of objects currently allocated in the system. This goes
+ * down after the garbage collector runs.
+ */
+static
+VALUE os_live_objects(VALUE self)
+{ return ULONG2NUM(live_objects); }
+
+/* call-seq:
+ *  ObjectSpace.allocated_objects => number
+ *
+ * Returns the count of objects allocated since the Ruby interpreter has
+ * started.  This number can only increase. To know how many objects are
+ * currently allocated, use ObjectSpace::live_objects
+ */
+static
+VALUE os_allocated_objects(VALUE self)
+{ 
+#if defined(HAVE_LONG_LONG)
+    return ULL2NUM(allocated_objects); 
+#else
+    return ULONG2NUM(allocated_objects); 
+#endif
+}
+
+
+
 /*
  *  The <code>GC</code> module provides an interface to Ruby's mark and
  *  sweep garbage collection mechanism. Some of the underlying methods
@@ -2101,6 +2147,8 @@ Init_GC()
     rb_define_module_function(rb_mObSpace, "remove_finalizer", rm_final, 1);
     rb_define_module_function(rb_mObSpace, "finalizers", finals, 0);
     rb_define_module_function(rb_mObSpace, "call_finalizer", call_final, 1);
+    rb_define_module_function(rb_mObSpace, "live_objects", os_live_objects, 0);
+    rb_define_module_function(rb_mObSpace, "allocated_objects", os_allocated_objects, 0);
 
     rb_define_module_function(rb_mObSpace, "define_finalizer", define_final, -1);
     rb_define_module_function(rb_mObSpace, "undefine_finalizer", undefine_final, 1);
