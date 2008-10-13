@@ -58,6 +58,7 @@ OBJS	      = array.$(OBJEXT) \
 		util.$(OBJEXT) \
 		variable.$(OBJEXT) \
 		version.$(OBJEXT) \
+		memtrack.$(OBJEXT) \
 		$(MISSING)
 
 SCRIPT_ARGS   =	--dest-dir="$(DESTDIR)" \
@@ -396,7 +397,7 @@ file.$(OBJEXT): {$(VPATH)}file.c {$(VPATH)}ruby.h config.h \
 gc.$(OBJEXT): {$(VPATH)}gc.c {$(VPATH)}ruby.h config.h \
   {$(VPATH)}defines.h {$(VPATH)}intern.h {$(VPATH)}missing.h \
   {$(VPATH)}rubysig.h {$(VPATH)}st.h {$(VPATH)}node.h \
-  {$(VPATH)}env.h {$(VPATH)}re.h {$(VPATH)}regex.h
+  {$(VPATH)}env.h {$(VPATH)}re.h {$(VPATH)}regex.h {$(VPATH)}memtrack.h
 hash.$(OBJEXT): {$(VPATH)}hash.c {$(VPATH)}ruby.h config.h \
   {$(VPATH)}defines.h {$(VPATH)}intern.h {$(VPATH)}missing.h \
   {$(VPATH)}st.h {$(VPATH)}util.h {$(VPATH)}rubysig.h
@@ -463,6 +464,7 @@ variable.$(OBJEXT): {$(VPATH)}variable.c {$(VPATH)}ruby.h config.h \
 version.$(OBJEXT): {$(VPATH)}version.c {$(VPATH)}ruby.h config.h \
   {$(VPATH)}defines.h {$(VPATH)}intern.h {$(VPATH)}missing.h \
   {$(VPATH)}version.h
+memtrack.$(OBJEXT): {$(VPATH)}memtrack.h
 
 dist: $(PROGRAM)
 	$(RUNRUBY) $(srcdir)/distruby.rb

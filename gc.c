@@ -18,6 +18,7 @@
 #include "node.h"
 #include "env.h"
 #include "re.h"
+#include "memtrack.h"
 #include <stdio.h>
 #include <setjmp.h>
 #include <sys/types.h>
@@ -442,6 +443,9 @@ rb_newobj()
     RANY(obj)->file = ruby_sourcefile;
     RANY(obj)->line = ruby_sourceline;
 #endif
+
+    _mem_track_track_allocate(obj);
+
     return obj;
 }
 
@@ -1196,6 +1200,7 @@ void
 rb_gc_force_recycle(p)
     VALUE p;
 {
+    _mem_track_track_deallocate(p);
     RANY(p)->as.free.flags = 0;
     RANY(p)->as.free.next = freelist;
     freelist = RANY(p);
@@ -1205,7 +1210,10 @@ static void
 obj_free(obj)
     VALUE obj;
 {
-    switch (RANY(obj)->as.basic.flags & T_MASK) {
+ 
+   _mem_track_track_deallocate(obj);
+
+   switch (RANY(obj)->as.basic.flags & T_MASK) {
       case T_NIL:
       case T_FIXNUM:
       case T_TRUE:
@@ -1961,6 +1969,677 @@ rb_gc_call_finalizer_at_exit()
 	    p++;
 	}
     }
+}
+
+//-NAME---------------------------------
+// _gc_isValidRubyObject
+//.DESCRIPTION..........................
+// Determine if a Ruby object (VALUE) is valid or not.
+// First check for a few special values then test if valid Ruby memory.
+//
+// This function should NOT be static - it is useful for debugging applications
+// (memory debuggers, profilers etc) to be able to test for an object being valid.
+//
+//.PARAMETERS...........................
+// obj	-in-	The object to test
+//.RETURN.CODES.........................
+// TRUE		Valid object
+// FALSE	Invalid object
+//--------------------------------------
+
+/* do not make static*/
+int _gc_isValidRubyObject(VALUE	obj)
+{
+	if (obj == Qfalse ||		// 0	from Ruby.h
+		obj == Qtrue  ||		// 2
+		obj == Qnil   ||		// 4
+		obj == Qundef)			// 6
+	{
+		return 0;
+	}
+
+	return is_pointer_to_heap((void *)obj) == Qtrue;
+}
+
+//-NAME---------------------------------
+// _gc_addObject
+//.DESCRIPTION..........................
+// Check an object to determine if valid. If valid
+// then call the callback.
+//.PARAMETERS...........................
+// obj		-in-	Object to send to the callback
+// callback	-in-	Callback to call if the object is valid
+// userData	-in-	User supplied data to send to the callback
+//.RETURN.CODES.........................
+// None
+//--------------------------------------
+
+static void _gc_addObject(VALUE obj,
+			  RUBY_HEAP_ROOTS callback,
+			  void	*userData)
+{
+	if (_gc_isValidRubyObject(obj))
+	{
+		callback(obj, userData);
+	}
+}
+
+//-NAME---------------------------------
+// _gc_getReferencedHashTableIterator
+//.DESCRIPTION..........................
+// Iterator for hash table used for calling callback with
+// contents of hash table.
+//.PARAMETERS...........................
+// key		-in-	Hash table key
+// value	-in-	Hash table value
+// arg		-in-	User supplied argument (CALLBACK DATA *)
+//.RETURN.CODES.........................
+// ST_CONTINUE
+//--------------------------------------
+
+typedef struct _callbackData
+{
+	RUBY_HEAP_ROOTS	callback;
+	void			*userData;
+} CALLBACK_DATA;
+
+static int _gc_getReferencedHashTableIterator(st_data_t	key,
+					      st_data_t	value,
+					      st_data_t	arg)
+{
+	CALLBACK_DATA	*data;
+	RVALUE *obj;
+	data = (CALLBACK_DATA *)arg;
+	_gc_addObject(key, data->callback, data->userData);
+	_gc_addObject(value, data->callback, data->userData);
+
+	return ST_CONTINUE;	//enum st_retval {ST_CONTINUE, ST_STOP, ST_DELETE, ST_CHECK};
+}
+
+//-NAME---------------------------------
+// _gc_addHashTable
+//.DESCRIPTION..........................
+// Send the contents of the hash table to the callback.
+//.PARAMETERS...........................
+// tbl		-in-	Hash table to iterate
+// callback	-in-	Callback to call for each object
+// userData	-in-	UserData to send to callback
+//.RETURN.CODES.........................
+// None
+//--------------------------------------
+
+static void _gc_addHashTable(st_table *tbl, 
+			     RUBY_HEAP_ROOTS callback,
+			     void *userData)
+{
+	CALLBACK_DATA	data;
+
+	data.callback = callback;
+	data.userData = userData;
+	st_foreach(tbl, _gc_getReferencedHashTableIterator, (VALUE)&data);
+}
+
+//-NAME---------------------------------
+// _gc_markLocationsArray
+//.DESCRIPTION..........................
+// Add the contents of an array to the callback.
+//.PARAMETERS...........................
+// x		-in-	Pointer to array of VALUEs to add
+// n		-in-	Length of the array
+// callback	-in-	Callback to call for each object
+// userData	-in-	UserData to send to callback
+//.RETURN.CODES.........................
+// None
+//--------------------------------------
+
+static void _gc_markLocationsArray(VALUE *x, 
+				   long	n,
+				   RUBY_HEAP_ROOTS callback,
+				   void	*userData)
+{
+    VALUE v;
+
+    while (n--) 
+	{
+        v = *x;
+		x++;
+	
+		_gc_addObject(v, callback, userData);
+    }
+}
+
+//-NAME---------------------------------
+// _gc_get_referenced_objects
+//.DESCRIPTION..........................
+// If you change this function API be sure to change the extern in memtrack.c
+//
+// Written with a large amount of input from gc_mark_children in gc.c of Ruby source
+//.PARAMETERS...........................
+// ptr			-in-	Ruby object we are querying
+// callback		-in-	Callback to be called for each referenced object
+// userData		-in-	User supplied data to be passed to callback with referenced object
+//.RETURN.CODES.........................
+// None
+//--------------------------------------
+
+void _gc_get_referenced_objects(VALUE ptr, // the object we are checking against
+				RUBY_HEAP_ROOTS	callback,
+				void *userData)
+{
+	RVALUE	*obj = (RVALUE *)RANY(ptr);
+
+	if (callback == NULL)
+	{
+		return;
+	}
+
+	// check if we aren't in critical code
+
+	if (rb_thread_critical == Qtrue)
+	{
+		// sleeping or in critical code, can't do this, ignore
+
+		return;
+	}
+
+	goto fetching;
+
+again:
+	obj = (RVALUE *)RANY(ptr);
+	if (!_gc_isValidRubyObject(ptr))
+		return;
+
+	if (rb_special_const_p(ptr)) 
+		return;									// special const not marked 
+	if (obj->as.basic.flags == 0) 
+		return;									// free cell 
+	if (obj->as.basic.flags & FL_MARK) 
+		return;									// already marked, don't include this
+	
+fetching:
+	if (!_gc_isValidRubyObject(ptr))
+		return;
+
+	if (FL_TEST(obj, FL_EXIVAR)) 
+	{
+		// get any internal variables of this object (would normally call rb_mark_generic_ivar(ptr))
+
+		st_table	*tbl;
+
+		tbl = (st_table *)rb_generic_ivar_table(ptr);
+		if (tbl != NULL)
+		{
+			_gc_addHashTable(tbl, callback, userData);
+		}
+	}
+	
+	switch (obj->as.basic.flags & T_MASK) 
+	{
+	case T_NIL:
+	case T_FIXNUM:
+		// broken object, nothing to do
+		break;
+		
+	case T_NODE:
+		//er, can we add this? Is this an object?
+		//_gc_addObject(obj->as.node.nd_file, callback, userData);
+
+		switch (nd_type(obj)) 
+		{
+		case NODE_IF:		// 1,2,3 
+		case NODE_FOR:
+		case NODE_ITER:
+		case NODE_CREF:
+		case NODE_WHEN:
+		case NODE_MASGN:
+		case NODE_RESCUE:
+		case NODE_RESBODY:
+		case NODE_CLASS:
+			_gc_addObject((VALUE)obj->as.node.u2.node, callback, userData);
+			// fall through 
+		case NODE_BLOCK:	// 1,3 
+		case NODE_ARRAY:
+		case NODE_DSTR:
+		case NODE_DXSTR:
+		case NODE_DREGX:
+		case NODE_DREGX_ONCE:
+		case NODE_FBODY:
+		case NODE_ENSURE:
+		case NODE_CALL:
+		case NODE_DEFS:
+		case NODE_OP_ASGN1:
+			_gc_addObject((VALUE)obj->as.node.u1.node, callback, userData);
+			// fall through 
+		case NODE_SUPER:	// 3 
+		case NODE_FCALL:
+		case NODE_DEFN:
+		case NODE_NEWLINE:
+			_gc_addObject((VALUE)obj->as.node.u3.node, callback, userData);
+			break;
+			
+		case NODE_WHILE:	// 1,2 
+		case NODE_UNTIL:
+		case NODE_AND:
+		case NODE_OR:
+		case NODE_CASE:
+		case NODE_SCLASS:
+		case NODE_DOT2:
+		case NODE_DOT3:
+		case NODE_FLIP2:
+		case NODE_FLIP3:
+		case NODE_MATCH2:
+		case NODE_MATCH3:
+		case NODE_OP_ASGN_OR:
+		case NODE_OP_ASGN_AND:
+		case NODE_MODULE:
+			_gc_addObject((VALUE)obj->as.node.u1.node, callback, userData);
+			// fall through 
+		case NODE_METHOD:	// 2 
+		case NODE_NOT:
+		case NODE_GASGN:
+		case NODE_LASGN:
+		case NODE_DASGN:
+		case NODE_DASGN_CURR:
+		case NODE_IASGN:
+		case NODE_CVDECL:
+		case NODE_CVASGN:
+		case NODE_COLON3:
+		case NODE_OPT_N:
+		case NODE_EVSTR:
+			_gc_addObject((VALUE)obj->as.node.u2.node, callback, userData);
+			break;
+			
+		case NODE_HASH:	// 1 
+		case NODE_LIT:
+		case NODE_STR:
+		case NODE_XSTR:
+		case NODE_DEFINED:
+		case NODE_MATCH:
+		case NODE_RETURN:
+		case NODE_BREAK:
+		case NODE_NEXT:
+		case NODE_YIELD:
+		case NODE_COLON2:
+		case NODE_ARGS:
+		case NODE_SPLAT:
+		case NODE_TO_ARY:
+		case NODE_SVALUE:
+			_gc_addObject((VALUE)obj->as.node.u1.node, callback, userData);
+			break;
+			
+		case NODE_SCOPE:	// 2,3 
+		case NODE_BLOCK_PASS:
+		case NODE_CDECL:
+			_gc_addObject((VALUE)obj->as.node.u3.node, callback, userData);
+			_gc_addObject((VALUE)obj->as.node.u2.node, callback, userData);
+			break;
+			
+		case NODE_ZARRAY:	// - 
+		case NODE_ZSUPER:
+		case NODE_CFUNC:
+		case NODE_VCALL:
+		case NODE_GVAR:
+		case NODE_LVAR:
+		case NODE_DVAR:
+		case NODE_IVAR:
+		case NODE_CVAR:
+		case NODE_NTH_REF:
+		case NODE_BACK_REF:
+		case NODE_ALIAS:
+		case NODE_VALIAS:
+		case NODE_REDO:
+		case NODE_RETRY:
+		case NODE_UNDEF:
+		case NODE_SELF:
+		case NODE_NIL:
+		case NODE_TRUE:
+		case NODE_FALSE:
+		case NODE_ATTRSET:
+		case NODE_BLOCK_ARG:
+		case NODE_POSTEXE:
+			break;
+#ifdef C_ALLOCA
+		case NODE_ALLOCA:
+			_gc_markLocationsArray((VALUE*)obj->as.node.u1.value, obj->as.node.u3.cnt, callback, userData);
+			_gc_addObject((VALUE)obj->as.node.u2.node, callback, userData);
+			break;
+#endif
+			
+		default:		// unlisted NODE 
+			_gc_addObject((VALUE)obj->as.node.u1.node, callback, userData);
+			_gc_addObject((VALUE)obj->as.node.u2.node, callback, userData);
+			_gc_addObject((VALUE)obj->as.node.u3.node, callback, userData);
+			break;
+		}
+	}
+	
+	_gc_addObject(obj->as.basic.klass, callback, userData);
+
+	switch (obj->as.basic.flags & T_MASK)  
+	{
+	case T_ICLASS:
+	case T_CLASS:
+	case T_MODULE:
+	  if (obj->as.klass.m_tbl != NULL) {
+	    _gc_addHashTable(obj->as.klass.m_tbl, callback, userData+1);
+	  }
+	  if (obj->as.klass.iv_tbl != NULL) {
+	    _gc_addHashTable(obj->as.klass.iv_tbl, callback, userData+1);
+	  }
+
+	  _gc_addObject(obj->as.klass.super, callback, userData);
+	  
+	  break;
+		
+	case T_ARRAY:
+		if (FL_TEST(obj, ELTS_SHARED)) 
+		{
+			_gc_addObject(obj->as.array.aux.shared, callback, userData);
+			break;
+		}
+		else 
+		{
+			long i, len = obj->as.array.len;
+			VALUE *ptr = obj->as.array.ptr;
+			
+			for (i=0; i < len; i++) 
+			{
+				_gc_addObject(*ptr++, callback, userData);
+			}
+		}
+		break;
+		
+	case T_HASH:
+		if (obj->as.hash.tbl != NULL)
+			_gc_addHashTable(obj->as.hash.tbl, callback, userData);
+		_gc_addObject(obj->as.hash.ifnone, callback, userData);
+		break;
+		
+	case T_STRING:
+#define STR_ASSOC FL_USER3   // copied from string.c 
+		if (FL_TEST(obj, ELTS_SHARED|STR_ASSOC)) 
+		{
+			_gc_addObject(obj->as.string.aux.shared, callback, userData);
+			break;
+		}
+		break;
+		
+	case T_DATA:
+		// er, what do I do here?
+		/*
+		if (obj->as.data.dmark) 
+		{
+			(*obj->as.data.dmark)(DATA_PTR(obj));
+		}
+		*/
+		break;
+		
+	case T_OBJECT:
+		if (obj->as.object.iv_tbl != NULL)
+		{
+			_gc_addHashTable(obj->as.object.iv_tbl, callback, userData);
+		}
+		break;
+		
+	case T_FILE:
+	case T_REGEXP:
+	case T_FLOAT:
+	case T_BIGNUM:
+	case T_BLKTAG:
+		break;
+		
+	case T_MATCH:
+		if (obj->as.match.str) 
+		{
+			_gc_addObject(obj->as.match.str, callback, userData);
+			break;
+		}
+		break;
+		
+	case T_VARMAP:
+		_gc_addObject(obj->as.varmap.val, callback, userData);
+
+		ptr = (VALUE)obj->as.varmap.next;
+		goto again;
+		
+	case T_SCOPE:
+		if (obj->as.scope.local_vars && (obj->as.scope.flags & SCOPE_MALLOC)) 
+		{
+			int		n = obj->as.scope.local_tbl[0]+1;
+			VALUE	*vars = &obj->as.scope.local_vars[-1];
+			
+			while (n--) 
+			{
+				_gc_addObject(*vars++, callback, userData);
+			}
+		}
+		break;
+		
+	case T_STRUCT:
+		{
+			long	len = obj->as.rstruct.len;
+			VALUE	*ptr = obj->as.rstruct.ptr;
+			
+			while (len--) 
+			{
+				_gc_addObject(*ptr++, callback, userData);
+			}
+		}
+		break;
+		
+	default:
+		//rb_bug("rb_gc_mark(): unknown data type 0x%lx(0x%lx) %s",
+		//	obj->as.basic.flags & T_MASK, obj,
+		//	is_pointer_to_heap(obj) ? "corrupted object" : "non object");
+		break;
+	}
+}
+
+extern st_table *rb_global_tbl;
+
+//-NAME---------------------------------
+// _gc_get_roots
+//.DESCRIPTION..........................
+// Function to get the root objects for this Ruby application.
+// The list below describes where to find Ruby roots. In places I haven't
+// been sure what to do, so left the code commented out.
+//
+// Ruby roots are found from:
+//	Frames				ruby_frame
+//	Scope				ruby_scope
+//	Dynamic variables	ruby_dyna_vars
+//	Finalizer table		finalizer_table
+//	Threads				Unsure how to go about this - TODO
+//	Global variables	global_List
+//  end procs			Unsure how to go about this - TODO
+//	Procedures			rb_global_tbl
+//	Class table			rb_class_tbl
+//	Parser				Can probably ignore this OK - TODO
+//
+// If you change this function API be sure to change the extern in memtrack.c
+//.PARAMETERS...........................
+// callback		-in-	Callback to be called for each referenced object
+// userData		-in-	User supplied data to be passed to callback with referenced object
+//.RETURN.CODES.........................
+// None
+//--------------------------------------
+
+void _gc_get_roots(RUBY_HEAP_ROOTS callback,
+		   void	*userData)
+{
+  // frames
+  // iterate the frames adding them to the roots
+
+  struct FRAME * volatile frame;
+  
+  // check callback is valid
+  if (callback == NULL)
+    return;
+
+  // check if we aren't in critical code
+  if (rb_thread_critical == Qtrue)
+    {
+      // sleeping or in critical code, can't do this, ignore
+      return;
+    }
+
+	frame = ruby_frame;
+	while(frame != NULL) 
+	{
+		if (_gc_isValidRubyObject(frame->self))
+		{
+			int	i;
+
+			(*callback)(frame->self, userData);
+			(*callback)((VALUE)frame->node, userData);
+		}
+
+		if (frame->tmp) 
+		{
+			struct FRAME	*tmp;
+			
+			tmp = frame->tmp;
+			while (tmp != NULL) 
+			{
+				if (_gc_isValidRubyObject(tmp->self))
+				{
+					int	i;
+
+					(*callback)(tmp->self, userData);
+					(*callback)((VALUE)tmp->node, userData);
+				}
+				tmp = tmp->prev;
+			}
+		}
+
+		frame = frame->prev;
+	}
+
+	// scope
+
+	(*callback)((VALUE)ruby_scope, userData);
+
+	// dynamic variables
+
+	(*callback)((VALUE)ruby_dyna_vars, userData);
+
+	// class table
+
+	if (rb_class_tbl != NULL)
+	{
+		if (rb_class_tbl->bins != NULL &&
+			rb_class_tbl->num_entries > 0 &&
+			rb_class_tbl->num_bins > 0)
+		{
+			_gc_addHashTable(rb_class_tbl, callback, userData);
+		}
+	}
+
+	// add the finalizer table
+
+	if (finalizer_table != NULL)
+	{
+		if (finalizer_table->bins != NULL &&
+			finalizer_table->num_entries > 0 &&
+			finalizer_table->num_bins > 0)
+		{
+			_gc_addHashTable(finalizer_table, callback, userData);
+		}
+	}
+
+	// threads
+/*	
+	void rb_gc_mark_threads()
+	{
+		rb_thread_t th;
+
+		rb_gc_mark((VALUE)ruby_cref);
+
+		if (curr_thread == NULL) 
+			return;
+
+		th = curr_thread; 
+		do 
+		{
+			th = th->next;
+			{
+				rb_gc_mark(th->thread);
+			} 
+		} while (th != curr_thread)
+	}
+*/
+
+  // global variables
+  {
+    struct gc_list	*list;
+    	
+    for (list = global_List; list != NULL; list = list->next) 
+      {
+	if (list->varptr != NULL)
+	  {
+	    if (_gc_isValidRubyObject(*list->varptr))
+	      {
+		(*callback)(*list->varptr, userData);
+	      }
+	  }
+      }
+  }
+
+  // end procedures
+ 
+/*
+    void rb_mark_end_proc()
+    {
+    struct end_proc_data *link;
+
+    link = end_procs;
+
+    DWORD					addr;
+    struct end_proc_data	*link;
+
+    addr = (DWORD)&bp[5];
+    addr = *((DWORD *)addr);
+    link = (struct end_proc_data *)addr;
+    while(link != NULL) 
+    {
+    if (_gc_isValidRubyObject(link->data))
+    {
+    (*callback)(link->data, userData);
+    }
+    link = link->next;
+    }
+    }
+*/
+  
+// globals
+ 
+ if (rb_global_tbl != NULL)
+   {
+     if (rb_global_tbl->bins != NULL &&
+	 rb_global_tbl->num_entries > 0 &&
+	 rb_global_tbl->num_bins > 0)
+       {
+	 _gc_addHashTable(rb_global_tbl, callback, userData);
+       }
+   }
+ 
+ // parser
+ 
+ /*
+ // ignore for now...
+ 
+ void rb_gc_mark_parser()
+ {
+ if (!ruby_in_compile) return;
+ 
+ rb_gc_mark_maybe((VALUE)yylval.node);
+ rb_gc_mark(ruby_debug_lines);
+ rb_gc_mark(lex_lastline);
+ rb_gc_mark(lex_input);
+ rb_gc_mark((VALUE)lex_strterm);
+ }
+ */
+ 
 }
 
 /*
