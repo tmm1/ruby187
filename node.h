@@ -413,6 +413,7 @@ struct rb_thread {
     long   stk_max;
     VALUE *stk_ptr;
     VALUE *stk_pos;
+    VALUE *machine_stack_end;
 #ifdef __ia64
     long   bstr_len;
     long   bstr_max;
@@ -461,6 +462,15 @@ struct rb_thread {
     VALUE thread;
 
     VALUE sandbox;
+
+    VALUE fiber;
+    VALUE root_fiber;
+    rb_jmpbuf_t root_jmpbuf;
+
+    int state;
+    VALUE first_proc;
+    VALUE first_args;
+    VALUE (*first_func)(ANYARGS);
 };
 
 extern VALUE (*ruby_sandbox_save)_((rb_thread_t));
