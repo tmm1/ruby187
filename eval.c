@@ -13534,7 +13534,7 @@ cont_restore_1(rb_context_t *cont)
     }
 #endif
 
-    printf("cont_restore_1: RUBY_LONGJMP(%p)\n", cont->jmpbuf);
+    printf("cont_restore_1: RUBY_LONGJMP(%p)\n", &cont->jmpbuf);
     ruby_longjmp(cont->jmpbuf, 1);
 }
 
@@ -13811,7 +13811,7 @@ fiber_store(rb_fiber_t *next_fib)
     // cont_save_machine_stack(th, &fib->cont);
     fib->cont.saved_thread.stk_ptr = fib->cont.saved_thread.machine_stack_end = 0;
  
-    printf("RUBY_SETJMP(%p)\n", fib->cont.jmpbuf);
+    printf("RUBY_SETJMP(%p)\n", &fib->cont.jmpbuf);
 
     if (RUBY_SETJMP(fib->cont.jmpbuf)) {
 	/* restored */
@@ -13860,7 +13860,7 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
     cont->value = make_passing_arg(argc, argv);
     
     if ((value = fiber_store(fib)) == Qundef) {
-        // printf("after fiber_store, jmpbuf: %p\n", fib->cont.jmpbuf)
+        printf("after fiber_store, jmpbuf: %p\n", &fib->cont.jmpbuf);
 	cont_restore_0(&fib->cont, &value);
 	rb_bug("rb_fiber_resume: unreachable");
     }
@@ -13966,43 +13966,61 @@ fiber_link_join(rb_fiber_t *fib)
     current_fib->next_fiber = fib;
 }
 
+VALUE rb_fiber_transfer(VALUE fib, int argc, VALUE *argv);
+
+static void
+rb_fiber_terminate(rb_fiber_t *fib)
+{
+    VALUE value = fib->cont.value;
+    fib->status = TERMINATED;
+    rb_fiber_transfer(return_fiber(), 1, &value);
+}
+
+#define GetContPtr(obj, ptr)  \
+  Data_Get_Struct(obj, rb_context_t, ptr)
+
+#define GetFiberPtr(obj, ptr)  \
+  Data_Get_Struct(obj, rb_fiber_t, ptr)
+
 void
 rb_fiber_start(void)
 {
-    rb_thread_t *th = GET_THREAD();
+    rb_thread_t th = GET_THREAD();
     rb_fiber_t *fib;
     rb_context_t *cont;
-    rb_proc_t *proc;
     VALUE args;
     int state;
 
     GetFiberPtr(th->fiber, fib);
     cont = &fib->cont;
 
-    TH_PUSH_TAG(th);
+    PUSH_TAG(th);
     if ((state = EXEC_TAG()) == 0) {
-	GetProcPtr(cont->saved_thread.first_proc, proc);
 	args = cont->value;
 	cont->value = Qnil;
 	th->errinfo = Qnil;
-	th->local_lfp = proc->block.lfp;
-	th->local_svar = Qnil;
+	//th->local_lfp = proc->block.lfp;
+	//th->local_svar = Qnil;
 
 	fib->status = RUNNING;
-	cont->value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
+	if (args == Qnil)
+                cont->value = rb_proc_call(cont->saved_thread.first_proc, rb_ary_new2(0));
+        else
+                cont->value = rb_proc_call(cont->saved_thread.first_proc, args);
+        // cont-> value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
     }
-    TH_POP_TAG();
+    POP_TAG();
 
-    if (state) {
-	if (TAG_RAISE) {
-	    th->thrown_errinfo = th->errinfo;
-	}
-	else {
-	    th->thrown_errinfo =
-	      vm_make_jump_tag_but_local_jump(state, th->errinfo);
-	}
-	RUBY_VM_SET_INTERRUPT(th);
-    }
+        //     if (state) {
+        // if (TAG_RAISE) {
+        //     th->thrown_errinfo = th->errinfo;
+        // }
+        // else {
+        //     th->thrown_errinfo =
+        //       vm_make_jump_tag_but_local_jump(state, th->errinfo);
+        // }
+        // RUBY_VM_SET_INTERRUPT(th);
+        //     }
 
     rb_fiber_terminate(fib);
     rb_bug("rb_fiber_start: unreachable");
@@ -14027,15 +14045,14 @@ fiber_new(VALUE klass, VALUE proc)
     th->tag = 0;
     th->locals = st_init_numtable();
 
+    printf("save first_proc: %p\n", proc);
+    th->first_proc = proc;
+
     if (setjmp(cont->jmpbuf) == 0){
             // nothing
     } else { // longjmp
             rb_fiber_start();
     }
-
-    // printf("save first_proc: %p\n", proc);
-    // th->first_proc = proc;
-    // 
     // MEMCPY(&cont->jmpbuf, &th->root_jmpbuf, rb_jmpbuf_t, 1);
 
     return fibval;
