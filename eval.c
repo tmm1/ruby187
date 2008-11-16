@@ -13424,7 +13424,7 @@ typedef struct rb_context_struct {
     VALUE *machine_register_stack_src;
     int machine_register_stack_size;
 #endif
-    rb_thread_t saved_thread;
+    struct rb_thread saved_thread;
     rb_jmpbuf_t jmpbuf;
     int machine_stack_size;
 } rb_context_t;
@@ -13453,7 +13453,7 @@ cont_init(rb_context_t *cont)
   rb_thread_t th = GET_THREAD();
   
   /* save thread context */
-  cont->saved_thread = th;
+  cont->saved_thread = *th;
 }
 
 static VALUE
@@ -13475,7 +13475,7 @@ static void
 cont_restore_1(rb_context_t *cont)
 {
   rb_thread_t th = GET_THREAD();
-  rb_thread_t sth = cont->saved_thread;
+  rb_thread_t sth = &cont->saved_thread;
 
     /* restore thread context */
     if (cont->type == CONTINUATION_CONTEXT) {
@@ -13488,8 +13488,8 @@ cont_restore_1(rb_context_t *cont)
 	if (fib) {
 	    rb_context_t *fcont;
 	    GetContPtr(fib, fcont);
-	    th->stk_len = fcont->saved_thread->stk_len;
-	    th->stk_ptr = fcont->saved_thread->stk_ptr;
+	    th->stk_len = (&fcont->saved_thread)->stk_len;
+	    th->stk_ptr = (&fcont->saved_thread)->stk_ptr;
 	}
 	MEMCPY(th->stk_ptr, cont->vm_stack, VALUE, sth->stk_len);
     }
@@ -13507,6 +13507,7 @@ cont_restore_1(rb_context_t *cont)
     th->status = sth->status;
     th->tag = sth->tag;
     th->errinfo = sth->errinfo;
+    printf("restore first_proc: %p\n", sth->first_proc);
     th->first_proc = sth->first_proc;
 
     /* restore machine stack */
@@ -13533,6 +13534,7 @@ cont_restore_1(rb_context_t *cont)
     }
 #endif
 
+    printf("cont_restore_1: RUBY_LONGJMP(%p)\n", cont->jmpbuf);
     ruby_longjmp(cont->jmpbuf, 1);
 }
 
@@ -13617,7 +13619,7 @@ cont_mark(void *ptr)
 
 	if (cont->vm_stack) {
 	    rb_gc_mark_locations(cont->vm_stack,
-				 cont->vm_stack + cont->saved_thread->stk_len);
+				 cont->vm_stack + (&cont->saved_thread)->stk_len);
 	}
 
 	if (cont->machine_stack) {
@@ -13638,7 +13640,7 @@ cont_free(void *ptr)
 {
     if (ptr) {
 	rb_context_t *cont = ptr;
-	RUBY_FREE_UNLESS_NULL(cont->saved_thread->stk_ptr); 
+	RUBY_FREE_UNLESS_NULL((&cont->saved_thread)->stk_ptr); 
 	fflush(stdout);
 	RUBY_FREE_UNLESS_NULL(cont->machine_stack);
 #ifdef __ia64
@@ -13676,7 +13678,7 @@ fiber_free(void *ptr)
 	rb_fiber_t *fib = ptr;
 
 	if (fib->cont.type != ROOT_FIBER_CONTEXT) {
-	    st_free_table(fib->cont.saved_thread->locals);
+	    st_free_table((&fib->cont.saved_thread)->locals);
 	}
 	fiber_link_remove(fib);
 
@@ -13739,7 +13741,7 @@ static void
 cont_save_machine_stack(rb_thread_t th, rb_context_t *cont)
 {
     int size;
-    rb_thread_t sth = cont->saved_thread;
+    rb_thread_t sth = &cont->saved_thread;
     
     SET_STACK_END;
     th->machine_stack_end = STACK_END;
@@ -13798,7 +13800,7 @@ fiber_store(rb_fiber_t *next_fib)
 
     if (th->fiber) {
 	GetFiberPtr(th->fiber, fib);
-	fib->cont.saved_thread = th;
+	fib->cont.saved_thread = *th;
     }
     else {
 	/* create current fiber */
@@ -13806,7 +13808,10 @@ fiber_store(rb_fiber_t *next_fib)
 	th->root_fiber = th->fiber = fib->cont.self;
     }
 
-    /*    cont_save_machine_stack(th, &fib->cont); */
+    // cont_save_machine_stack(th, &fib->cont);
+    (&fib->cont.saved_thread)->stk_ptr = (&fib->cont.saved_thread)->machine_stack_end = 0;
+ 
+    printf("RUBY_SETJMP(%p)\n", fib->cont.jmpbuf);
 
     if (RUBY_SETJMP(fib->cont.jmpbuf)) {
 	/* restored */
@@ -13841,7 +13846,7 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
     GetFiberPtr(fibval, fib);
     cont = &fib->cont;
 
-    if (cont->saved_thread != th) {
+    if (0 && &cont->saved_thread != th) {
 	rb_raise(rb_eFiberError, "fiber called across threads");
     }
     else if (fib->status == TERMINATED) {
@@ -13966,7 +13971,7 @@ fiber_new(VALUE klass, VALUE proc)
     rb_fiber_t *fib = fiber_alloc(klass);
     VALUE fibval = fib->cont.self;
     rb_context_t *cont = &fib->cont;
-    rb_thread_t th = cont->saved_thread;
+    rb_thread_t th = &cont->saved_thread;
 
     fiber_link_join(fib);
 
@@ -13979,6 +13984,7 @@ fiber_new(VALUE klass, VALUE proc)
     th->tag = 0;
     th->locals = st_init_numtable();
 
+    printf("save first_proc: %p\n", proc);
     th->first_proc = proc;
 
     MEMCPY(&cont->jmpbuf, &th->root_jmpbuf, rb_jmpbuf_t, 1);
