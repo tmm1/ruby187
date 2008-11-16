@@ -13488,8 +13488,8 @@ cont_restore_1(rb_context_t *cont)
 	if (fib) {
 	    rb_context_t *fcont;
 	    GetContPtr(fib, fcont);
-	    th->stk_len = (&fcont->saved_thread)->stk_len;
-	    th->stk_ptr = (&fcont->saved_thread)->stk_ptr;
+	    th->stk_len = fcont->saved_thread.stk_len;
+	    th->stk_ptr = fcont->saved_thread.stk_ptr;
 	}
 	MEMCPY(th->stk_ptr, cont->vm_stack, VALUE, sth->stk_len);
     }
@@ -13619,7 +13619,7 @@ cont_mark(void *ptr)
 
 	if (cont->vm_stack) {
 	    rb_gc_mark_locations(cont->vm_stack,
-				 cont->vm_stack + (&cont->saved_thread)->stk_len);
+				 cont->vm_stack + cont->saved_thread.stk_len);
 	}
 
 	if (cont->machine_stack) {
@@ -13640,7 +13640,7 @@ cont_free(void *ptr)
 {
     if (ptr) {
 	rb_context_t *cont = ptr;
-	RUBY_FREE_UNLESS_NULL((&cont->saved_thread)->stk_ptr); 
+	RUBY_FREE_UNLESS_NULL(cont->saved_thread.stk_ptr); 
 	fflush(stdout);
 	RUBY_FREE_UNLESS_NULL(cont->machine_stack);
 #ifdef __ia64
@@ -13678,7 +13678,7 @@ fiber_free(void *ptr)
 	rb_fiber_t *fib = ptr;
 
 	if (fib->cont.type != ROOT_FIBER_CONTEXT) {
-	    st_free_table((&fib->cont.saved_thread)->locals);
+	    st_free_table(fib->cont.saved_thread.locals);
 	}
 	fiber_link_remove(fib);
 
@@ -13809,7 +13809,7 @@ fiber_store(rb_fiber_t *next_fib)
     }
 
     // cont_save_machine_stack(th, &fib->cont);
-    (&fib->cont.saved_thread)->stk_ptr = (&fib->cont.saved_thread)->machine_stack_end = 0;
+    fib->cont.saved_thread.stk_ptr = fib->cont.saved_thread.machine_stack_end = 0;
  
     printf("RUBY_SETJMP(%p)\n", fib->cont.jmpbuf);
 
@@ -13860,6 +13860,7 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
     cont->value = make_passing_arg(argc, argv);
     
     if ((value = fiber_store(fib)) == Qundef) {
+        // printf("after fiber_store, jmpbuf: %p\n", fib->cont.jmpbuf)
 	cont_restore_0(&fib->cont, &value);
 	rb_bug("rb_fiber_resume: unreachable");
     }
