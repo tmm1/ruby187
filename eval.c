@@ -13800,7 +13800,7 @@ fiber_store(rb_fiber_t *next_fib)
 
     if (th->fiber) {
 	GetFiberPtr(th->fiber, fib);
-	fib->cont.saved_thread = *th;
+	//fib->cont.saved_thread = *th;
     }
     else {
 	/* create current fiber */
@@ -13808,12 +13808,11 @@ fiber_store(rb_fiber_t *next_fib)
 	th->root_fiber = th->fiber = fib->cont.self;
     }
 
-    // cont_save_machine_stack(th, &fib->cont);
-    fib->cont.saved_thread.stk_ptr = fib->cont.saved_thread.machine_stack_end = 0;
+    rb_thread_save_context(&fib->cont.saved_thread);
  
-    printf("RUBY_SETJMP(%p)\n", &fib->cont.jmpbuf);
+    // printf("RUBY_SETJMP(%p)\n", &fib->cont.saved_thread.context);
 
-    if (RUBY_SETJMP(fib->cont.jmpbuf)) {
+    if (RUBY_SETJMP(fib->cont.saved_thread.context)) {
 	/* restored */
 	GetFiberPtr(th->fiber, fib);
 	return fib->cont.value;
@@ -13860,8 +13859,9 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
     cont->value = make_passing_arg(argc, argv);
     
     if ((value = fiber_store(fib)) == Qundef) {
-        printf("after fiber_store, jmpbuf: %p\n", &fib->cont.jmpbuf);
-	cont_restore_0(&fib->cont, &value);
+        // printf("after fiber_store, jmpbuf: %p\n", &fib->cont.jmpbuf);
+        // cont_restore_0(&fib->cont, &value);
+        rb_thread_restore_context(&cont->saved_thread, RESTORE_NORMAL);
 	rb_bug("rb_fiber_resume: unreachable");
     }
 
@@ -14039,19 +14039,23 @@ fiber_new(VALUE klass, VALUE proc)
     /* initialize cont */
     cont->vm_stack = 0;
 
+    rb_thread_save_context(th);
+
+    /*
     th->stk_ptr = 0;
     th->stk_len = FIBER_VM_STACK_SIZE;
     th->stk_ptr = ALLOC_N(VALUE, th->stk_len);
+    */
     th->tag = 0;
     th->locals = st_init_numtable();
 
     printf("save first_proc: %p\n", proc);
     th->first_proc = proc;
 
-    if (setjmp(cont->jmpbuf) == 0){
-            // nothing
-    } else { // longjmp
-            rb_fiber_start();
+    if (RUBY_SETJMP(th->context)){
+        // restored
+        printf("fiber_new restored\n");
+        rb_fiber_start();
     }
     // MEMCPY(&cont->jmpbuf, &th->root_jmpbuf, rb_jmpbuf_t, 1);
 
