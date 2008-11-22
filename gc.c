@@ -298,7 +298,7 @@ rb_gc_unregister_address(addr)
     }
 }
 
-#undef GC_DEBUG
+#define GC_DEBUG 1
 
 void
 rb_global_variable(var)
@@ -1618,6 +1618,202 @@ void ruby_init_stack(VALUE *addr
 #endif
 }
 
+#define RUBY_OBJ_COUNT 0x0F
+
+static FILE *heap_dump_file = NULL;
+static unsigned long long heap_obj_counts[RUBY_OBJ_COUNT];
+
+
+static void
+dump_obj(VALUE ptr, int tlo) 
+{
+  RVALUE *obj = (RVALUE *)RANY(ptr);
+  RVALUE *kobj = NULL;
+  unsigned int type = 0;
+  int i = 0; 
+  char *classname = NULL, *superclass = NULL;
+
+  if (ptr == 0) {
+    fprintf(heap_dump_file, " found a NULL obj, skipping\n");
+    return;
+  }
+  
+  if(obj->as.free.flags == 0) {
+    fprintf(heap_dump_file, " is marked as FREE ");
+  }
+
+  type = obj->as.basic.flags & T_MASK;
+
+  fprintf(heap_dump_file, "[Dumping 0x%.8x]\n", ptr);
+  fprintf(heap_dump_file, "allocated @ %s:%d", obj->file, obj->line);
+
+  if (tlo)
+ 	 ++heap_obj_counts[type];
+
+  switch (type) {
+
+  case T_NIL:
+    fprintf(heap_dump_file, " is a T_NIL, and nothing else to do.\n");
+    break;
+
+  case T_OBJECT:
+    fprintf(heap_dump_file, " is an OBJECT");
+    classname =  RSTRING_PTR(rb_mod_name(obj->as.basic.klass));
+    if (!classname || classname[0] == '\0')
+      fprintf(heap_dump_file, "\n");
+    else
+      fprintf(heap_dump_file, " of type: %s\n", classname);
+	  
+    break;
+
+  case T_FIXNUM:
+    fprintf(heap_dump_file, " is a T_FIXNUM, has value: %lu\n", FIX2LONG(ptr));
+    break;
+
+  case T_NODE:
+    fprintf(heap_dump_file, " is a NODE\n");
+    break;
+
+  case T_ARRAY:
+    if (FL_TEST(obj, ELTS_SHARED)) {
+      fprintf(heap_dump_file, " is an ARRAY that has ELTS_SHARED marked.\n");
+      break;
+    }
+    else {
+      long len = obj->as.array.len;
+      fprintf(heap_dump_file, " is an ARRAY of len: %ld.\n", len);
+    }
+    break;
+  case T_STRING:
+    fprintf(heap_dump_file, " is a STRING");
+#define STR_ASSOC FL_USER3   // copied from string.c 
+    if (FL_TEST(obj, ELTS_SHARED|STR_ASSOC)) {
+      fprintf(heap_dump_file, " which has STR_ASSOC and ELTS_SHARED marked.\n");
+    }
+    
+    fprintf(heap_dump_file, " which has len: %ld and val: %s\n", obj->as.string.len, obj->as.string.ptr);
+    break;
+
+  case T_CLASS:
+    classname = RSTRING_PTR(rb_mod_name(ptr));
+    superclass = RSTRING_PTR(rb_mod_name(obj->as.klass.super));
+    fprintf(heap_dump_file, " which is a CLASS ");
+    if (classname && classname[0] != '\0')
+      fprintf(heap_dump_file, " named: %s", classname); 
+    else
+      fprintf(heap_dump_file, " no name - maybe anon class?");
+
+    if (superclass && superclass[0] != '\0')
+      fprintf(heap_dump_file, " inherits from %s", superclass);
+
+    fprintf(heap_dump_file, "\n");
+    break;
+    
+  case T_HASH:
+    if (obj->as.hash.tbl != NULL)
+      fprintf(heap_dump_file,  " is a HASH which has data\n");
+    else
+      fprintf(heap_dump_file, "  is a HASH which DOES NOT have data\n");
+    break;
+
+  case T_REGEXP:
+    fprintf(heap_dump_file, " is a REGEXP val: %s\n", obj->as.regexp.str);
+    break;
+
+  default:
+    fprintf(heap_dump_file, " is a type I don't know: %d\n", type);
+    break;
+  }
+}
+
+static void
+rb_stack_trkr(VALUE obj, void *addr) {
+  fprintf(heap_dump_file, 
+          "Found a pointer that looks like a heap pointer: 0x%.8x @ address: %p\n",
+          obj, addr);
+  dump_obj(obj, 0);
+}
+
+static void
+rb_heap_obj_setup_trkr(VALUE obj, VALUE klass) {
+  fprintf(heap_dump_file,"Setting 0x%.8x to klass: 0x%.8x\n", 
+	  obj,
+	  klass);
+}
+
+static void
+rb_heap_obj_alloc_trkr(VALUE obj, ROTA_ACTION action)
+{
+  time_t result = time(NULL);
+  RVALUE *ptr;
+
+  if (!obj || !_gc_isValidRubyObject(obj)) {
+    fprintf(heap_dump_file, 
+	    "%s triggered alloc trkr with action: %d for invalid object: 0x%.8x!\n",
+	    asctime(localtime(&result)),
+	    action,
+	    obj);
+    return;
+  }
+    
+
+  ptr = RANY(obj);
+  switch (action) {
+  case ROTA_ALLOCATE:
+    fprintf(heap_dump_file, "allocated 0x%.8x\n",
+	    obj);
+    
+    break;
+  case ROTA_DEALLOCATE:
+    fprintf(heap_dump_file, "DEallocated 0x%.8x\n",
+	    obj);
+    break;
+  default:
+    fprintf(stderr, "Unknown ROTA action: %d\n", action);
+    break;
+
+  }
+  
+  return;
+}
+
+static void 
+set_heap_dump_parameters()
+{
+  char *hd_alloc_ptr, *data_file_ptr, *hd_setup_ptr, *rb_stack_track_ptr;
+
+  heap_dump_file = stderr;
+
+  rb_set_stack_tracking_hook(rb_stack_trkr);
+  
+  hd_alloc_ptr = getenv("RUBY_HEAP_ALLOC");
+  if (hd_alloc_ptr) {
+    int hd_alloc_i = atoi(hd_alloc_ptr);
+    if (hd_alloc_i > 0) {
+      rb_set_object_tracing_hook(rb_heap_obj_alloc_trkr); 
+    }
+  }
+
+  hd_setup_ptr = getenv("RUBY_HEAP_SETUP");
+  if (hd_setup_ptr) {
+    int hd_setup_i = atoi(hd_setup_ptr);
+    if (hd_setup_i > 0) {
+      rb_set_object_setup_tracking_hook(rb_heap_obj_setup_trkr);
+    }
+  }
+
+  data_file_ptr = getenv("RUBY_HEAP_LOG");
+  if (data_file_ptr) {
+    FILE *data_file = fopen(data_file_ptr, "w");
+    if (data_file)
+      heap_dump_file = data_file;
+    else
+      fprintf(stderr, 
+	      "can't open log file %s for writing, using stderr instead\n",
+	      data_file_ptr);
+  }
+}
+
 /*
  * Document-class: ObjectSpace
  *
@@ -1655,6 +1851,7 @@ Init_heap()
     if (!rb_gc_stack_start) {
 	Init_stack(0);
     }
+    set_heap_dump_parameters();
     add_heap();
 }
 
@@ -1818,6 +2015,60 @@ undefine_final(os, obj)
 	st_delete(finalizer_table, (st_data_t*)&obj, 0);
     }
     return obj;
+}
+
+static void
+check_locations_array(x, n)
+     register VALUE *x;
+     register long n;
+{
+  VALUE v;
+  while (n--) {
+    v = *x;
+    if (is_pointer_to_heap((void *)v)) {
+      rb_stack_track(v, x);
+    }
+    x++;
+  }
+}
+
+void
+rb_gc_check_locations(start, end)
+     VALUE *start, *end;
+{
+  long n;
+  
+  fprintf(heap_dump_file, " Starting addy: 0x%.8x -  Ending addy: 0x%.8x\n", start, end);
+ 
+  n = end - start;
+  check_locations_array(start,n);
+}
+
+VALUE
+rb_gc_stack_dump() {
+  jmp_buf save_regs_gc_mark;
+  SET_STACK_END;
+   
+  FLUSH_REGISTER_WINDOWS;
+  /* This assumes that all registers are saved into the jmp_buf (and stack) */
+  rb_setjmp(save_regs_gc_mark);
+  
+  fprintf(heap_dump_file, " Checking registers.... \n");
+  
+  check_locations_array((VALUE*)save_regs_gc_mark, sizeof(save_regs_gc_mark) / sizeof(VALUE *));
+  
+  fprintf(heap_dump_file, " Checking stack.... \n");
+  
+#if STACK_GROW_DIRECTION < 0
+  rb_gc_check_locations((VALUE*)STACK_END, rb_gc_stack_start);
+#elif STACK_GROW_DIRECTION > 0
+  rb_gc_check_locations(rb_gc_stack_start, (VALUE*)STACK_END + 1);
+#else
+  if ((VALUE*)STACK_END < rb_gc_stack_start)
+    rb_gc_check_locations((VALUE*)STACK_END, rb_gc_stack_start);
+  else
+    rb_gc_check_locations(rb_gc_stack_start, (VALUE*)STACK_END + 1);
+#endif
 }
 
 /*
@@ -2321,14 +2572,25 @@ fetching:
 	case T_CLASS:
 	case T_MODULE:
 	  if (obj->as.klass.m_tbl != NULL) {
+	    /**
+	       XXX TODO
+	       This check is bad, but if userData is non NULL then we are doing
+	       a find and we don't want this printout to fire.
+	     **/
+	    if (userData == NULL)
+	      fprintf(heap_dump_file, "mtable members:\n");
 	    _gc_addHashTable(obj->as.klass.m_tbl, callback, userData);
 	  }
 	  if (obj->as.klass.iv_tbl != NULL) {
+	    /**
+	       XXX TODO
+	       This check is bad, but if userData is non NULL then we are doing
+	       a find and we don't want this printout to fire.
+	     **/
+	    if (userData == NULL)
+	      fprintf(heap_dump_file, "ivtable members:\n"); 
 	    _gc_addHashTable(obj->as.klass.iv_tbl, callback, userData);
 	  }
-
-	  _gc_addObject(obj->as.klass.super, callback, userData);
-	  
 	  break;
 		
 	case T_ARRAY:
@@ -2754,6 +3016,153 @@ rb_obj_id(VALUE obj)
     return (VALUE)((long)obj|FIXNUM_FLAG);
 }
 
+struct findRefs {
+  VALUE objToFind;
+  VALUE root;
+};
+
+static int
+print_heap_objs(VALUE obj, void *userData) 
+{
+  fprintf(heap_dump_file, "referenced obj: 0x%.8x\n", obj);
+  dump_obj(obj, 0);
+  return 1; 
+}
+
+static int
+find_heap_obj(VALUE obj, void *userData)
+{
+  struct findRefs *findMe = userData;
+  if (obj == findMe->objToFind) {
+    fprintf(heap_dump_file, "Root obj: 0x%.8x has ref to: 0x%.8x\n",
+	    findMe->root,
+	    obj);
+
+    fprintf(heap_dump_file, "Dumping root obj that holds ref:\n");
+    dump_obj(findMe->root, 1);
+
+    fprintf(heap_dump_file, "\nDumping obj searched for:\n");
+    dump_obj(obj, 1);
+  }
+  return 1;
+}
+
+VALUE
+rb_gc_counts()
+{
+  int i = 0; 
+  unsigned long count = 0;
+
+  fprintf(heap_dump_file, "\n\nTYPE COUNTS:\n");
+
+  for(; i < RUBY_OBJ_COUNT; i++) {
+    count = heap_obj_counts[i];
+    switch (i) {
+    case T_NIL:
+      fprintf(heap_dump_file, "T_NIL: %lu\n", count);
+      break;
+    case T_OBJECT:
+      fprintf(heap_dump_file, "T_OBJECT: %lu\n", count);
+      break;
+    case T_FIXNUM:
+      fprintf(heap_dump_file, "T_FIXNUM: %lu\n", count);
+      break;
+    case T_NODE:
+      fprintf(heap_dump_file, "T_NODE: %lu\n", count);
+      break;
+    case T_ARRAY:
+      fprintf(heap_dump_file, "T_ARRAY: %lu\n", count);
+      break;
+    case T_STRING:
+      fprintf(heap_dump_file, "T_STRING: %lu\n", count);
+      break;
+    case T_CLASS:
+      fprintf(heap_dump_file, "T_CLASS: %lu\n", count);
+      break;
+    case T_ICLASS:
+      fprintf(heap_dump_file, "T_ICLASS: %lu\n", count);
+      break;
+    case T_REGEXP:
+      fprintf(heap_dump_file, "T_REGEXP: %lu\n", count);
+      break;      
+    case T_MODULE:
+      fprintf(heap_dump_file, "T_MODULE: %lu\n", count);
+      break;
+    case T_FLOAT:
+      fprintf(heap_dump_file, "T_FLOAT: %lu\n", count);
+      break;
+    case T_HASH:
+      fprintf(heap_dump_file, "T_HASH: %lu\n", count);
+      break;
+    case T_STRUCT:
+      fprintf(heap_dump_file, "T_STRUCT: %lu\n", count);
+      break;
+    case T_BIGNUM:
+      fprintf(heap_dump_file, "T_BIGNUM: %lu\n", count);
+      break;
+    case T_FILE:
+      fprintf(heap_dump_file, "T_FILE: %lu\n", count);
+      break;
+    default:
+      fprintf(heap_dump_file, "type %d: %lu\n", i, count);
+      break;
+    }
+  }
+
+  return Qnil;
+}
+
+VALUE
+rb_gc_heap_dump()
+{
+   RVALUE *p, *pend;
+   int i, used = heaps_used;
+
+   memset(heap_obj_counts, 0, sizeof(heap_obj_counts[0]) * RUBY_OBJ_COUNT);
+
+   for (i = 0; i < used; i++) {
+       p = heaps[i].slot; 
+       pend = p + heaps[i].limit;
+       while (p < pend) {
+	 if(_gc_isValidRubyObject((VALUE)p) &&
+	    RBASIC(p)->flags != 0) {
+	   fprintf(heap_dump_file, "\n\nFound ruby valid non-freed obj on heap: %d @ slot: %d\n", i, pend-p);
+	   dump_obj((VALUE)p, 1);
+	   rb_get_referenced_objects((VALUE)p, print_heap_objs, NULL);
+	 }
+           p++;
+       }
+   }
+   return Qnil;
+}
+
+VALUE
+rb_gc_heap_ref_find(VALUE self, VALUE objToFind) 
+{
+   RVALUE *p, *pend;
+   int i, used = heaps_used;
+
+   struct findRefs findMe;
+   findMe.objToFind = objToFind;
+   
+   memset(heap_obj_counts, 0, sizeof(heap_obj_counts[0]) * RUBY_OBJ_COUNT);
+
+   for (i = 0; i < used; i++) {
+       p = heaps[i].slot; 
+       pend = p + heaps[i].limit;
+       while (p < pend) {
+	 if(_gc_isValidRubyObject((VALUE)p) &&
+	    RBASIC(p)->flags != 0) {
+	   findMe.root = (VALUE)p;
+	   rb_get_referenced_objects((VALUE)p, find_heap_obj, &findMe);
+	 }
+           p++;
+       }
+   }
+   return Qnil;
+}
+
+
 /*
  *  The <code>GC</code> module provides an interface to Ruby's mark and
  *  sweep garbage collection mechanism. Some of the underlying methods
@@ -2771,6 +3180,11 @@ Init_GC()
     rb_define_singleton_method(rb_mGC, "disable", rb_gc_disable, 0);
     rb_define_singleton_method(rb_mGC, "stress", gc_stress_get, 0);
     rb_define_singleton_method(rb_mGC, "stress=", gc_stress_set, 1);
+    rb_define_singleton_method(rb_mGC, "heap_dump", rb_gc_heap_dump, 0);
+    rb_define_singleton_method(rb_mGC, "heap_find", rb_gc_heap_ref_find, 1);
+    rb_define_singleton_method(rb_mGC, "stack_dump", rb_gc_stack_dump, 0);    
+
+    rb_define_singleton_method(rb_mGC, "heap_counts", rb_gc_counts, 0);
     rb_define_method(rb_mGC, "garbage_collect", rb_gc_start, 0);
 
     rb_mObSpace = rb_define_module("ObjectSpace");

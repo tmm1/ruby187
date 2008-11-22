@@ -53,6 +53,10 @@ extern "C" {
 #include <stddef.h>
 #include <stdio.h>
 
+#ifdef GC_DEBUG
+#include "memtrack.h"
+#endif 
+
 /* need to include <ctype.h> to use these macros */
 #ifndef ISPRINT
 #define ISASCII(c) isascii((int)(unsigned char)(c))
@@ -300,11 +304,22 @@ char *rb_str2cstr _((VALUE,long*));
 
 VALUE rb_newobj _((void));
 #define NEWOBJ(obj,type) type *obj = (type*)rb_newobj()
+#define GC_DEBUG 1
+#if defined(GC_DEBUG)
+#define OBJSETUP(obj,c,t) do {\
+    RBASIC(obj)->flags = (t);\
+    RBASIC(obj)->klass = (c);\
+    if (rb_safe_level() >= 3) FL_SET(obj, FL_TAINT);\
+    rb_setup_obj_track((VALUE)obj, c);		    \
+} while (0)
+#else /* !defined(GC_DEBUG) */
 #define OBJSETUP(obj,c,t) do {\
     RBASIC(obj)->flags = (t);\
     RBASIC(obj)->klass = (c);\
     if (rb_safe_level() >= 3) FL_SET(obj, FL_TAINT);\
 } while (0)
+#endif /* defined(GC_DEBUG) */
+
 #define CLONESETUP(clone,obj) do {\
     OBJSETUP(clone,rb_singleton_class_clone((VALUE)obj),RBASIC(obj)->flags);\
     rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)clone);\
