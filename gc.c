@@ -2321,10 +2321,10 @@ fetching:
 	case T_CLASS:
 	case T_MODULE:
 	  if (obj->as.klass.m_tbl != NULL) {
-	    _gc_addHashTable(obj->as.klass.m_tbl, callback, userData+1);
+	    _gc_addHashTable(obj->as.klass.m_tbl, callback, userData);
 	  }
 	  if (obj->as.klass.iv_tbl != NULL) {
-	    _gc_addHashTable(obj->as.klass.iv_tbl, callback, userData+1);
+	    _gc_addHashTable(obj->as.klass.iv_tbl, callback, userData);
 	  }
 
 	  _gc_addObject(obj->as.klass.super, callback, userData);
