@@ -13785,7 +13785,7 @@ rb_fiber_start(void)
 	th->errinfo = Qnil;
 
 	fib->status = RUNNING;
-        cont->value = rb_proc_call(cont->saved_thread.first_proc, args);
+        cont->value = rb_proc_call(cont->saved_thread.fiber_proc, args);
         // cont-> value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
     }
     POP_TAG();
@@ -13807,7 +13807,7 @@ fiber_new(VALUE klass, VALUE proc)
     /* initialize cont */
     cont->vm_stack = 0;
 
-    th->first_proc = proc;
+    th->fiber_proc = proc;
     rb_thread_save_context(th);
 
     if (RUBY_SETJMP(th->context)){
