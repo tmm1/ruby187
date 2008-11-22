@@ -13456,19 +13456,6 @@ cont_init(rb_context_t *cont)
   cont->saved_thread = *th;
 }
 
-static VALUE
-make_passing_arg(int argc, VALUE *argv)
-{
-    switch(argc) {
-      case 0:
-	return rb_ary_new2(0);
-      case 1:
-	return argv[0];
-      default:
-	return rb_ary_new4(argc, argv);
-    }
-}
-
 static void
 cont_mark(void *ptr)
 {
@@ -13615,6 +13602,19 @@ rb_fiber_current()
 	th->root_fiber = th->fiber = fib->cont.self;
     }
     return th->fiber;
+}
+
+static VALUE
+make_passing_arg(int argc, VALUE *argv)
+{
+    switch(argc) {
+      case 0:
+        return Qnil;
+      case 1:
+        return argv[0];
+      default:
+	return rb_ary_new4(argc, argv);
+    }
 }
 
 static inline VALUE
@@ -13785,7 +13785,13 @@ rb_fiber_start(void)
 	th->errinfo = Qnil;
 
 	fib->status = RUNNING;
-        cont->value = rb_proc_call(cont->saved_thread.fiber_proc, args);
+        if (args == Qnil)
+                args = rb_ary_new2(0);
+        else if (TYPE(args) != T_ARRAY)
+                args = rb_ary_new3(1, args);
+
+        cont->value = rb_thread_yield(args, cont->saved_thread);
+        // cont->value = rb_proc_call(cont->saved_thread.fiber_proc, args);
         // cont-> value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
     }
     POP_TAG();
@@ -13807,7 +13813,7 @@ fiber_new(VALUE klass, VALUE proc)
     /* initialize cont */
     cont->vm_stack = 0;
 
-    th->fiber_proc = proc;
+    // th->fiber_proc = proc;
     rb_thread_save_context(th);
 
     if (RUBY_SETJMP(th->context)){
@@ -13818,16 +13824,17 @@ fiber_new(VALUE klass, VALUE proc)
     return fibval;
 }
 
-VALUE
-rb_fiber_new(VALUE (*func)(ANYARGS), VALUE obj)
-{
-    return fiber_new(rb_cFiber, rb_proc_new(func, obj));
-}
+// VALUE
+// rb_fiber_new(VALUE (*func)(ANYARGS), VALUE obj)
+// {
+//     return fiber_new(rb_cFiber, rb_proc_new(func, obj));
+// }
 
 static VALUE
 rb_fiber_s_new(VALUE self)
 {
-    return fiber_new(self, rb_block_proc());
+    // return fiber_new(self, rb_block_proc());
+    return fiber_new(self, Qnil);
 }
 
 
