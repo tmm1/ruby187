@@ -1,6 +1,6 @@
 require 'test/unit'
-require 'fiber'
-require 'continuation'
+# require 'fiber'
+# require 'continuation'
 
 class TestFiber < Test::Unit::TestCase
   def test_normal
@@ -40,7 +40,8 @@ class TestFiber < Test::Unit::TestCase
       }
     )
   end
-
+end
+__END__
   def test_many_fibers_with_threads
     max = 1000
     @cnt = 0
