@@ -13461,9 +13461,9 @@ make_passing_arg(int argc, VALUE *argv)
 {
     switch(argc) {
       case 0:
-	return Qnil;
-      case 1:
-	return argv[0];
+	return rb_ary_new2(0);
+//      case 1:
+//	return argv[0];
       default:
 	return rb_ary_new4(argc, argv);
     }
@@ -14003,10 +14003,7 @@ rb_fiber_start(void)
 	//th->local_svar = Qnil;
 
 	fib->status = RUNNING;
-	if (args == Qnil)
-                cont->value = rb_proc_call(cont->saved_thread.first_proc, rb_ary_new2(0));
-        else
-                cont->value = rb_proc_call(cont->saved_thread.first_proc, args);
+        cont->value = rb_proc_call(cont->saved_thread.first_proc, args);
         // cont-> value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
     }
     POP_TAG();
