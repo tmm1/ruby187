@@ -1,0 +1,23 @@
+http://timetobleed.com/plugging-ruby-memory-leaks-heapstack-dump-patches-to-help-take-out-the-trash/
+
+Four functions were added to GC: heap_dump, heap_find, heap_counts, and stack_dump. After applying the patches below and rebuilding Ruby, you can use these functions. There are a bunch of environment variables you can set to control how much output you get. WARNING: There can be a lot of output.
+
+Environment vars and what they do:
+
+RUBY_HEAP_LOG - setting this environment var will cause heap dumping output to be written to the specified file. If this is not set data will be written to stderr
+
+RUBY_HEAP_ALLOC - setting this environment var to anything greather than or equal to 1 will cause output whenever a ruby object is allocated or deallocated this creates a LOT of output.
+
+RUBY_HEAP_SETUP - setting this environment var to anything greater than or equal to 1 will cause output whenever a ruby object has its klass field set.
+
+Ok - now let's take a quick look at the four added functions and what they do when you use them:
+
+GC.heap_dump - this function writes to stderr (unless RUBY_HEAP_LOG is set) the contents of the Ruby heap. It outputs each object that is not marked as free and information about that object and the objects it references. For strings, for example, the value and length of the string will be output. For classes, the name of the class (unless it is an anonymous class) and the superclass.
+
+GC.heap_find - this function takes one argument and traverses the heap looking for objects which hold a reference to the argument. Once found, it outputs information about the object holding the reference and also information about the object you passed in.
+
+GC.heap_counts - this function is poorly implemented and can only be called after you have called GC.heap_dump. This function outputs the number of each type of Ruby object that has been created (object, node, class, module, string, fixnum, float, etc).
+
+GC.stack_dump - this function checks the registers and stack frames for things which look like pointers to the heap. If the pointer looks like it is pointed at the heap, the address of the pointer is output as well as information about the object it references.
+
+
