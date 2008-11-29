@@ -1760,7 +1760,6 @@ localjump_error(mesg, value, reason)
 {
     VALUE exc = rb_exc_new2(rb_eLocalJumpError, mesg);
     ID id;
-
     rb_iv_set(exc, "@exit_value", value);
     switch (reason) {
       case TAG_BREAK:
@@ -4768,7 +4767,7 @@ int
 rb_block_given_p()
 {
     if (ruby_frame->iter == ITER_CUR && ruby_block)
-	return Qtrue;
+    return Qtrue;
     return Qfalse;
 }
 
@@ -8373,10 +8372,9 @@ scope_dup(scope)
 {
     ID *tbl;
     VALUE *vars;
-
     scope->flags |= SCOPE_DONT_RECYCLE;
-    if (scope->flags & SCOPE_MALLOC) return;
 
+    if (scope->flags & SCOPE_MALLOC) return;
     if (scope->local_tbl) {
 	tbl = scope->local_tbl;
 	vars = ALLOC_N(VALUE, tbl[0]+1);
@@ -12315,7 +12313,7 @@ rb_thread_yield(arg, th)
     const ID *tbl;
 
     scope_dup(ruby_block->scope);
-
+    
     tbl = ruby_scope->local_tbl;
     if (tbl) {
 	int n = *tbl++;
@@ -12328,7 +12326,6 @@ rb_thread_yield(arg, th)
     rb_dvar_push('_', Qnil);
     rb_dvar_push('~', Qnil);
     ruby_block->dyna_vars = ruby_dyna_vars;
-
     return rb_yield_0(arg, 0, 0, YIELD_LAMBDA_CALL, Qtrue);
 }
 
@@ -13096,6 +13093,9 @@ rb_cont_call(argc, argv, cont)
     if (th->thgroup != cont_protect) {
 	rb_raise(rb_eRuntimeError, "continuation called across trap");
     }
+    if (th->fiber != curr_thread->fiber) {
+	rb_raise(rb_eRuntimeError, "continuation called across fiber");
+	} 
     switch (argc) {
       case 0:
 	th->result = Qnil;
@@ -13416,17 +13416,8 @@ typedef struct rb_context_struct {
     enum context_type type;
     VALUE self;
     VALUE value;
-    VALUE *vm_stack;
-    VALUE *machine_stack;
-    VALUE *machine_stack_src;
-#ifdef __ia64
-    VALUE *machine_register_stack;
-    VALUE *machine_register_stack_src;
-    int machine_register_stack_size;
-#endif
     struct rb_thread saved_thread;
     rb_jmpbuf_t jmpbuf;
-    int machine_stack_size;
 } rb_context_t;
 
 enum fiber_status {
@@ -13451,7 +13442,6 @@ static void
 cont_init(rb_context_t *cont)
 {
   rb_thread_t th = GET_THREAD();
-  
   /* save thread context */
   cont->saved_thread = *th;
 }
@@ -13460,25 +13450,9 @@ static void
 cont_mark(void *ptr)
 {
     if (ptr) {
-	rb_context_t *cont = ptr;
-	rb_gc_mark(cont->value);
-	thread_mark(cont->saved_thread);
-
-	if (cont->vm_stack) {
-	    rb_gc_mark_locations(cont->vm_stack,
-				 cont->vm_stack + cont->saved_thread.stk_len);
-	}
-
-	if (cont->machine_stack) {
-	    rb_gc_mark_locations(cont->machine_stack,
-				 cont->machine_stack + cont->machine_stack_size);
-	}
-#ifdef __ia64
-	if (cont->machine_register_stack) {
-	    rb_gc_mark_locations(cont->machine_register_stack,
-				 cont->machine_register_stack + cont->machine_register_stack_size);
-	}
-#endif
+  	  rb_context_t *cont = ptr;
+	  rb_gc_mark(cont->value);
+	  thread_mark(cont->saved_thread);
     }
 }
 
@@ -13486,17 +13460,10 @@ static void
 cont_free(void *ptr)
 {
     if (ptr) {
-	rb_context_t *cont = ptr;
-	RUBY_FREE_UNLESS_NULL(cont->saved_thread.stk_ptr); 
-	fflush(stdout);
-	RUBY_FREE_UNLESS_NULL(cont->machine_stack);
-#ifdef __ia64
-	RUBY_FREE_UNLESS_NULL(cont->machine_register_stack);
-#endif
-	RUBY_FREE_UNLESS_NULL(cont->vm_stack);
-
-	/* free rb_cont_t or rb_fiber_t */
-       	ruby_xfree(ptr); 
+	  rb_context_t *cont = ptr;
+	  RUBY_FREE_UNLESS_NULL(cont->saved_thread.stk_ptr); 
+  	  fflush(stdout);
+      ruby_xfree(ptr); 
     }
 }
 
@@ -13520,7 +13487,6 @@ fiber_link_remove(rb_fiber_t *fib)
 static void
 fiber_free(void *ptr)
 {
-    // XXX is this ever called?
     if (ptr) {
 	rb_fiber_t *fib = ptr;
 
@@ -13528,7 +13494,6 @@ fiber_free(void *ptr)
 	    st_free_table(fib->cont.saved_thread.locals);
 	}
 	fiber_link_remove(fib);
-
 	cont_free(&fib->cont);
     }
 }
@@ -13537,7 +13502,6 @@ static rb_fiber_t *
 fiber_alloc(VALUE klass)
 {
     rb_fiber_t *fib;
-    //    volatile VALUE fibval = Data_Make_Struct(klass, rb_fiber_t, fiber_mark, fiber_free, fib);
     volatile VALUE fibval = Data_Make_Struct(klass, rb_fiber_t, NULL, NULL, fib);
 
     fib->cont.self = fibval;
@@ -13545,7 +13509,6 @@ fiber_alloc(VALUE klass)
     cont_init(&fib->cont);
     fib->prev = Qnil;
     fib->status = CREATED;
-
     return fib;
 }
 
@@ -13559,7 +13522,6 @@ root_fiber_alloc(rb_thread_t th)
     fib = fiber_alloc(rb_cFiber);
     fib->cont.type = ROOT_FIBER_CONTEXT;
     fib->prev_fiber = fib->next_fiber = fib;
-
     return fib;
 }
 
@@ -13568,27 +13530,24 @@ fiber_store(rb_fiber_t *next_fib)
 {
     rb_thread_t th = GET_THREAD();
     rb_fiber_t *fib;
-
     if (th->fiber) {
-	GetFiberPtr(th->fiber, fib);
-    // XXX shouldn't this be using rb_thread_save_context?
-	fib->cont.saved_thread = *th;
+	  GetFiberPtr(th->fiber, fib);
+  	  fib->cont.saved_thread = *th;
+    } else {
+  	  /* create current fiber */
+	  fib = root_fiber_alloc(th);
+	  th->root_fiber = th->fiber = fib->cont.self;
     }
-    else {
-	/* create current fiber */
-	fib = root_fiber_alloc(th);
-	th->root_fiber = th->fiber = fib->cont.self;
-    }
-
+    
     rb_thread_save_context(&fib->cont.saved_thread);
- 
+
     if (RUBY_SETJMP(fib->cont.saved_thread.context)) {
-	/* restored */
-	GetFiberPtr(th->fiber, fib);
-	return fib->cont.value;
+	  /* restored */
+	  GetFiberPtr(th->fiber, fib);
+	  return fib->cont.value;
     }
     else {
-	return Qundef;
+  	  return Qundef;
     }
 }
 
@@ -13597,9 +13556,9 @@ rb_fiber_current()
 {
     rb_thread_t th = GET_THREAD();
     if (th->fiber == 0) {
-	/* save root */
-	rb_fiber_t *fib = root_fiber_alloc(th);
-	th->root_fiber = th->fiber = fib->cont.self;
+	  /* save root */
+	  rb_fiber_t *fib = root_fiber_alloc(th);
+	  th->root_fiber = th->fiber = fib->cont.self;
     }
     return th->fiber;
 }
@@ -13609,11 +13568,11 @@ make_passing_arg(int argc, VALUE *argv)
 {
     switch(argc) {
       case 0:
-        return Qnil;
+        return rb_ary_new2(0);
       case 1:
         return argv[0];
       default:
-	return rb_ary_new4(argc, argv);
+	    return rb_ary_new4(argc, argv);
     }
 }
 
@@ -13628,27 +13587,22 @@ fiber_switch(VALUE fibval, int argc, VALUE *argv, int is_resume)
     GetFiberPtr(fibval, fib);
     cont = &fib->cont;
 
-    // XXX re-enable this
     if (0 && &cont->saved_thread != th) {
-	rb_raise(rb_eFiberError, "fiber called across threads");
-    }
-    else if (fib->status == TERMINATED) {
-	rb_raise(rb_eFiberError, "dead fiber called");
+	  rb_raise(rb_eFiberError, "fiber called across threads");
+    } else if (fib->status == TERMINATED) {
+	  rb_raise(rb_eFiberError, "dead fiber called");
     }
 
     if (is_resume) {
-	fib->prev = rb_fiber_current();
+	  fib->prev = rb_fiber_current();
     }
     
     cont->value = make_passing_arg(argc, argv);
     
-    // XXX fiber_store ignores the argument
     if ((value = fiber_store(fib)) == Qundef) {
-        // XXX why did this do in 1.9? why fib, its ignored by fiber_store above
-        // cont_restore_0(&fib->cont, &value);
         th->fiber = cont->self;
         rb_thread_restore_context(&cont->saved_thread, RESTORE_NORMAL);
-	rb_bug("rb_fiber_resume: unreachable");
+	    rb_bug("rb_fiber_resume: unreachable");
     }
 
     return value;
@@ -13669,7 +13623,6 @@ rb_fiber_resume(VALUE fibval, int argc, VALUE *argv)
     if (fib->prev != Qnil) {
 	rb_raise(rb_eFiberError, "double resume");
     }
-
     return fiber_switch(fibval, argc, argv, 1);
 }
 
@@ -13682,7 +13635,7 @@ return_fiber(void)
     GetFiberPtr(curr, fib);
 
     if (fib->prev == Qnil) {
-	rb_thread_t th = GET_THREAD();
+	  rb_thread_t th = GET_THREAD();
 
 	if (th->root_fiber != curr) {
 	    return th->root_fiber;
@@ -13692,9 +13645,9 @@ return_fiber(void)
 	}
     }
     else {
-	VALUE prev = fib->prev;
-	fib->prev = Qnil;
-	return prev;
+	  VALUE prev = fib->prev;
+	  fib->prev = Qnil;
+	  return prev;
     }
 }
 
@@ -13760,12 +13713,6 @@ rb_fiber_terminate(rb_fiber_t *fib)
     rb_fiber_transfer(return_fiber(), 1, &value);
 }
 
-#define GetContPtr(obj, ptr)  \
-  Data_Get_Struct(obj, rb_context_t, ptr)
-
-#define GetFiberPtr(obj, ptr)  \
-  Data_Get_Struct(obj, rb_fiber_t, ptr)
-
 void
 rb_fiber_start(void)
 {
@@ -13778,42 +13725,61 @@ rb_fiber_start(void)
     GetFiberPtr(th->fiber, fib);
     cont = &fib->cont;
 
-    PUSH_TAG(PROT_THREAD);
-    if ((state = EXEC_TAG()) == 0) {
-	args = cont->value;
-	cont->value = Qnil;
-	th->errinfo = Qnil;
+   PUSH_TAG(PROT_THREAD); 
+   if ((state = EXEC_TAG()) == 0) {
+	  args = cont->value;
+	
+	  if (args == Qnil)
+	    args = rb_ary_new2(0);
+      else if (TYPE(args) != T_ARRAY)
+	    args = rb_ary_new3(1, args);	
+	
+	  cont->value = Qnil;
+	  th->errinfo = Qnil;
+	  fib->status = RUNNING;
+      cont->value = rb_thread_yield(args, cont->saved_thread);
+   }
+   POP_TAG();
 
-	fib->status = RUNNING;
-        if (args == Qnil)
-                args = rb_ary_new2(0);
-        else if (TYPE(args) != T_ARRAY)
-                args = rb_ary_new3(1, args);
-
-        cont->value = rb_thread_yield(args, cont->saved_thread);
-        // cont->value = rb_proc_call(cont->saved_thread.fiber_proc, args);
-        // cont-> value = vm_invoke_proc(th, proc, proc->block.self, 1, &args, 0);
-    }
-    POP_TAG();
-
+   if( state ){
+     if ( state == TAG_RAISE) {
+        //Compat with 1.9 API, reraise Thread return && throw errors 
+        if ( rb_obj_is_instance_of(ruby_errinfo, rb_eThreadError) ){
+		   if (memcmp( RSTRING(rb_obj_as_string(ruby_errinfo))->ptr, "return can't jump across threads", 32) == 0 ){
+		     localjump_error("unexpected return", Qundef, state);
+		   }else if (memcmp( RSTRING(rb_obj_as_string(ruby_errinfo))->ptr, "uncaught throw", 14) == 0 ){
+			 rb_raise(rb_eArgError, "throw ...");
+		   }
+        }else if (!NIL_P(ruby_errinfo)){
+		  rb_exc_raise(ruby_errinfo);
+		}  	
+     }else{
+       jump_tag_but_local_jump( state, Qundef );
+     }
+     rb_thread_interrupt();
+   }
+     
     rb_fiber_terminate(fib);
     rb_bug("rb_fiber_start: unreachable");
 }
 
 static VALUE
-fiber_new(VALUE klass, VALUE proc)
+rb_fiber_s_new(argc, argv, klass)
+    int argc;
+    VALUE *argv;
+    VALUE klass;
 {
+    if (!rb_block_given_p()) {
+	  rb_raise( rb_eArgError, "no block given" );
+    }
     rb_fiber_t *fib = fiber_alloc(klass);
     VALUE fibval = fib->cont.self;
     rb_context_t *cont = &fib->cont;
     rb_thread_t th = &cont->saved_thread;
-
+    rb_obj_call_init(fibval, argc, argv);
+    
     fiber_link_join(fib);
 
-    /* initialize cont */
-    cont->vm_stack = 0;
-
-    // th->fiber_proc = proc;
     rb_thread_save_context(th);
 
     if (RUBY_SETJMP(th->context)){
@@ -13821,22 +13787,8 @@ fiber_new(VALUE klass, VALUE proc)
         rb_fiber_start();
     }
 
-    return fibval;
+  return fibval;
 }
-
-// VALUE
-// rb_fiber_new(VALUE (*func)(ANYARGS), VALUE obj)
-// {
-//     return fiber_new(rb_cFiber, rb_proc_new(func, obj));
-// }
-
-static VALUE
-rb_fiber_s_new(VALUE self)
-{
-    // return fiber_new(self, rb_block_proc());
-    return fiber_new(self, Qnil);
-}
-
 
 void
 Init_Fiber()
@@ -13844,7 +13796,7 @@ Init_Fiber()
   rb_cFiber = rb_define_class("Fiber", rb_cObject);
   rb_undef_alloc_func(rb_cFiber);
   rb_eFiberError = rb_define_class("FiberError", rb_eStandardError);
-  rb_define_singleton_method(rb_cFiber, "new", rb_fiber_s_new, 0);
+  rb_define_singleton_method(rb_cFiber, "new", rb_fiber_s_new, -1);
   rb_define_singleton_method(rb_cFiber, "yield", rb_fiber_s_yield, -1);
   rb_define_method(rb_cFiber, "resume", rb_fiber_m_resume, -1);
   rb_define_method(rb_cFiber, "transfer", rb_fiber_m_transfer, -1);
