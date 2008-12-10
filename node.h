@@ -463,7 +463,6 @@ struct rb_thread {
     VALUE sandbox;
 
     VALUE fiber;
-    VALUE fiber_proc;
     VALUE root_fiber;
 };
 

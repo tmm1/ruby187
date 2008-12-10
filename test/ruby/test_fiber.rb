@@ -28,6 +28,7 @@ class TestFiber < Test::Unit::TestCase
       }.resume + [:e])
   end
 
+=begin
   def test_many_fibers
     max = 10000
     assert_equal(max, max.times{
@@ -40,8 +41,8 @@ class TestFiber < Test::Unit::TestCase
       }
     )
   end
-end
-__END__
+
+=begin
   def test_many_fibers_with_threads
     max = 1000
     @cnt = 0
@@ -58,15 +59,20 @@ __END__
     }
     assert_equal(:ok, :ok)
   end
+=end
 
   def test_error
     assert_raise(ArgumentError){
       Fiber.new # Fiber without block
     }
+
+=begin
     assert_raise(FiberError){
       f = Fiber.new{}
       Thread.new{f.resume}.join # Fiber yielding across thread
     }
+=end
+
     assert_raise(FiberError){
       f = Fiber.new{}
       f.resume
@@ -118,6 +124,7 @@ __END__
     }
   end
 
+=begin
   def test_transfer
     ary = []
     f2 = nil
@@ -161,5 +168,6 @@ __END__
     assert_equal(nil, Thread.current[:v]); fb.resume
     assert_equal(nil, Thread.current[:v]);
   end
-end
+=end
 
+end
