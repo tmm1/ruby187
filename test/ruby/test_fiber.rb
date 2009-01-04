@@ -1,6 +1,4 @@
 require 'test/unit'
-# require 'fiber'
-# require 'continuation'
 
 class TestFiber < Test::Unit::TestCase
   def test_normal
@@ -28,20 +26,18 @@ class TestFiber < Test::Unit::TestCase
       }.resume + [:e])
   end
 
-=begin
   def test_many_fibers
     max = 10000
     assert_equal(max, max.times{
       Fiber.new{}
-    })
+    }) 
     assert_equal(max,
       max.times{|i|
         Fiber.new{
         }.resume
       }
-    )
-  end
-
+    )     
+  end 
 =begin
   def test_many_fibers_with_threads
     max = 1000
@@ -59,20 +55,17 @@ class TestFiber < Test::Unit::TestCase
     }
     assert_equal(:ok, :ok)
   end
-=end
-
+=end  
   def test_error
     assert_raise(ArgumentError){
       Fiber.new # Fiber without block
     }
-
 =begin
     assert_raise(FiberError){
       f = Fiber.new{}
       Thread.new{f.resume}.join # Fiber yielding across thread
     }
 =end
-
     assert_raise(FiberError){
       f = Fiber.new{}
       f.resume
@@ -84,11 +77,13 @@ class TestFiber < Test::Unit::TestCase
       }.resume
       @c.call # cross fiber callcc
     }
+
     assert_raise(RuntimeError){
       Fiber.new{
         raise
       }.resume
     }
+
     assert_raise(FiberError){
       Fiber.yield
     }
@@ -124,7 +119,6 @@ class TestFiber < Test::Unit::TestCase
     }
   end
 
-=begin
   def test_transfer
     ary = []
     f2 = nil
@@ -139,6 +133,9 @@ class TestFiber < Test::Unit::TestCase
     assert_equal(:ok, f1.transfer)
     assert_equal([:baz], ary)
   end
+end
+
+__END__
 
   def test_tls
     # 
@@ -168,6 +165,5 @@ class TestFiber < Test::Unit::TestCase
     assert_equal(nil, Thread.current[:v]); fb.resume
     assert_equal(nil, Thread.current[:v]);
   end
-=end
 
 end

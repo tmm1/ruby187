@@ -484,6 +484,34 @@ int rb_thread_reset_raised(rb_thread_t th);
 #define rb_thread_raised_p(th, f)     (((th)->flags & (f)) != 0)
 #define rb_thread_raised_clear(th)    ((th)->flags = 0)
 
+enum context_type {
+    CONTINUATION_CONTEXT = 0,
+    FIBER_CONTEXT = 1,
+    ROOT_FIBER_CONTEXT = 2
+};
+
+typedef struct rb_context_struct {
+    enum context_type type;
+    VALUE self;
+    VALUE value;
+    struct rb_thread saved_thread;
+    rb_jmpbuf_t jmpbuf;
+} rb_context_t;
+
+enum fiber_status {
+    CREATED,
+    RUNNING,
+    TERMINATED,
+};
+
+typedef struct rb_fiber_struct {
+    rb_context_t cont;
+    VALUE prev;
+    enum fiber_status status;
+    struct rb_fiber_struct *prev_fiber;
+    struct rb_fiber_struct *next_fiber;
+} rb_fiber_t;
+
 #if defined(__cplusplus)
 }  /* extern "C" { */
 #endif
