@@ -13422,7 +13422,9 @@ rb_exec_recursive(func, obj, arg)
 }
 
 static VALUE
-make_passing_arg(int argc, VALUE *argv)
+make_passing_arg(argc, argv)
+    int argc;
+    VALUE *argv;
 {
   switch(argc) {
     case 0:
@@ -13435,14 +13437,17 @@ make_passing_arg(int argc, VALUE *argv)
 }
 
 static VALUE
-rb_fiber_rescue(rb_thread_t arg, VALUE error)
+rb_fiber_rescue(arg, error)
+    rb_thread_t arg;
+    VALUE error;
 {
   arg->fiber_error = error;
   return Qnil;
 }
 
 static VALUE
-rb_fiber_init(VALUE self)
+rb_fiber_init(self)
+    VALUE self;
 {
   if (!rb_block_given_p())
     rb_raise(rb_eArgError, "new Fiber requires a block");
@@ -13453,8 +13458,6 @@ rb_fiber_init(VALUE self)
   fib->fiber_value = Qnil;
 
   if (THREAD_SAVE_CONTEXT(fib)) {
-      // yield to passed in block
-      // make args, pass them into yield
      fib->fiber_status = FIBER_RUNNING;
      fib->fiber_value = rb_rescue(rb_yield, fib->fiber_value, rb_fiber_rescue, fib);
      fib->fiber_status = FIBER_KILLED;
@@ -13464,7 +13467,10 @@ rb_fiber_init(VALUE self)
 }
 
 static VALUE
-rb_fiber_resume(int argc, VALUE *argv, VALUE self)
+rb_fiber_resume(argc, argv, self)
+    int argc;
+    VALUE *argv;
+    VALUE self;
 {
   rb_thread_t fib, prev_fiber;
   Data_Get_Struct(self, rb_thread_t, fib);
@@ -13499,7 +13505,10 @@ rb_fiber_resume(int argc, VALUE *argv, VALUE self)
 }
 
 static VALUE
-rb_fiber_yield(int argc, VALUE *argv, VALUE self)
+rb_fiber_yield(argc, argv, self)
+    int argc;
+    VALUE *argv;
+    VALUE self;
 {
   rb_thread_t fib;
   Data_Get_Struct(self, rb_thread_t, fib);
@@ -13513,7 +13522,8 @@ rb_fiber_yield(int argc, VALUE *argv, VALUE self)
 }
 
 static VALUE
-rb_fiber_s_current(VALUE klass)
+rb_fiber_s_current(klass)
+    VALUE klass;
 {
   if (!curr_fiber)
     return root_fiber;
@@ -13522,7 +13532,10 @@ rb_fiber_s_current(VALUE klass)
 }
 
 static VALUE
-rb_fiber_s_yield(int argc, VALUE *argv, VALUE self)
+rb_fiber_s_yield(argc, argv, self)
+    int argc;
+    VALUE *argv;
+    VALUE self;
 {
   if (!curr_fiber) {
     rb_raise(rb_eFiberError, "can't yield from root fiber");
@@ -13538,7 +13551,8 @@ rb_fiber_s_yield(int argc, VALUE *argv, VALUE self)
 }
 
 static VALUE
-rb_fiber_alive_p(VALUE self)
+rb_fiber_alive_p(self)
+    VALUE self;
 {
   rb_thread_t fib;
   Data_Get_Struct(self, rb_thread_t, fib);
@@ -13546,30 +13560,33 @@ rb_fiber_alive_p(VALUE self)
 }
 
 static VALUE
-fiber_alloc(VALUE klass)
+fiber_alloc(klass)
+    VALUE klass;
 {
-  rb_thread_t th = prep4callcc();
-  th->fiber_return = prep4callcc();
-  th->fiber_self = Data_Wrap_Struct(klass, thread_mark, thread_free, th);
-  return th->fiber_self;
+  rb_thread_t fib = prep4callcc();
+  fib->fiber_return = prep4callcc();
+  fib->fiber_self = Data_Wrap_Struct(klass, thread_mark, thread_free, fib);
+  return fib->fiber_self;
 }
 
 static VALUE
-rb_root_fiber_resume(int argc, VALUE *argv, VALUE self)
+rb_root_fiber_resume(argc, argv, self)
+    int argc;
+    VALUE *argv;
+    VALUE self;
 {
   rb_raise(rb_eFiberError, "can't resume root fiber");
 }
 
 static VALUE
-rb_root_fiber_alloc(VALUE klass)
+rb_root_fiber_alloc()
 {
-   return root_fiber;
-}
-
-static VALUE
-rb_root_fiber_init(VALUE self)
-{
-  return self;
+  if (!root_fiber) {
+    rb_gc_register_address(&root_fiber);
+    root_fiber = Data_Wrap_Struct(rb_cFiber, 0, 0, 0);
+    rb_define_singleton_method(root_fiber, "resume", rb_root_fiber_resume, -1);
+  }
+  return root_fiber;
 }
 
 void
@@ -13581,19 +13598,18 @@ Init_Fiber()
   rb_define_singleton_method(rb_cFiber, "yield", rb_fiber_s_yield, -1);
   rb_define_method(rb_cFiber, "initialize", rb_fiber_init, 0);
   rb_define_method(rb_cFiber, "resume", rb_fiber_resume, -1);
-  //rb_define_method(rb_cFiber, "transfer", rb_fiber_m_transfer, -1);
-  rb_define_method(rb_cFiber, "alive?", rb_fiber_alive_p, 0);
-  rb_define_singleton_method(rb_cFiber, "current", rb_fiber_s_current, 0);
 
-  rb_cRootFiber = rb_define_class("RootFiber", rb_cFiber);
-  rb_define_method(rb_cRootFiber, "initialize", rb_root_fiber_init, 0);
-  rb_define_alloc_func(rb_cRootFiber, rb_root_fiber_alloc);
-  rb_define_method(rb_cRootFiber, "resume", rb_root_fiber_resume, -1);
-
-  root_fiber = Data_Wrap_Struct(rb_cRootFiber, 0, 0, 0);
+  rb_root_fiber_alloc();
   curr_fiber = NULL;
 }
 
+void
+ruby_Init_Fiber_as_Coroutine()
+{
+  //rb_define_method(rb_cFiber, "transfer", rb_fiber_transfer, -1);
+  rb_define_method(rb_cFiber, "alive?", rb_fiber_alive_p, 0);
+  rb_define_singleton_method(rb_cFiber, "current", rb_fiber_s_current, 0);
+}
 
 /*
  *  +Thread+ encapsulates the behavior of a thread of
