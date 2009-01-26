@@ -2,8 +2,8 @@
 
   signal.c -
 
-  $Author: knu $
-  $Date: 2008-06-06 19:39:57 +0900 (Fri, 06 Jun 2008) $
+  $Author: brent $
+  $Date: 2008/12/14 07:24:39 $
   created at: Tue Dec 20 10:13:44 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -629,8 +629,6 @@ sigsegv(sig)
     }
 #endif
 
-    extern int ruby_gc_stress;
-    ruby_gc_stress = 0;
     rb_bug("Segmentation fault");
 }
 #endif

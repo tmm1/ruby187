@@ -2,8 +2,8 @@
 
   intern.h -
 
-  $Author: shyouhei $
-  $Date: 2008-07-07 12:29:28 +0900 (Mon, 07 Jul 2008) $
+  $Author: brent $
+  $Date: 2008/12/24 05:54:37 $
   created at: Thu Jun 10 14:22:17 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -251,7 +251,7 @@ VALUE rb_file_directory_p _((VALUE,VALUE));
 /* gc.c */
 NORETURN(void rb_memerror __((void)));
 int ruby_stack_check _((void));
-int ruby_stack_length _((VALUE**));
+int ruby_stack_length _((VALUE *,VALUE**));
 int rb_during_gc _((void));
 char *rb_source_filename _((const char*));
 void rb_gc_mark_locations _((VALUE*, VALUE*));

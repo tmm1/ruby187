@@ -1,3 +1,160 @@
+Sun Jan 18 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * rubysig.h:  added support for STACK_WIPE_METHOD==5 (x86 asm)
+
+        * gc.c:       allow another STACK_WIPE_METHOD
+
+        * version.h:  bumped date
+
+
+Sat Jan 17 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * gc.c:     use separate gc stack so it never need be wiped
+
+        * version.h:  bumped date
+
+
+Fri Jan 16 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * gc.c:     added GC_STACK_PAD, renamed stack_gc_limit->gc_stack_limit
+                    optionally wipe the entire GC stack after each gc pass
+        
+        * rubysig.h:  default STACK_WIPE_SITES changed to 0x4770
+        
+        * version.h:  bumped date
+
+
+Wed Jan 14 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * eval.c:     declare wipe_after with gnu always_inline attribute
+        
+        * rubysig.h:  use alloca(0) to get sp for all CPU except PowerPC
+                      (less likely to trash stack when clearing it)
+        
+        * version.h:  bumped date
+
+
+Sun Jan 13 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * rubysig.h:  moved #defs to configure alloca here from gc.c
+                      added missing # to #else
+        
+        * gc.c: removed #defs to configurure alloca
+                set_stack_size must handle signed rlim_t for Darwin & BSD Unix
+                
+        * version.h:  bumped date
+
+
+Sun Jan 11 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * rubysig.h:  added support for multiple STACK_WIPE_METHODs
+                      added __stack_depth()
+                      added 2nd param to stack_past()
+                      __sp() returns stack pointer in an efficent, portable way                     
+        
+        * gc.c: STACK_END uses __sp()
+                STACK_UPPER now takes only two parameters
+                added rb_gc_wipe_stack()               
+                rb_mark_tbl() and mark_hash() implemented as #define macros
+                added STACK_END parameters to __stack_past() invocations
+                exploited missed opportunities for tail recursion in markchilren
+                
+        * version.h:  bumped date
+
+
+Mon Jan  5 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * common.mk:  added dependency on rubysig.h to version.h     
+        
+        * eval.c:  added wipeAfter and STACK_WIPE_SITES cofiguration options
+        
+        * gc.c: added STACK_WIPE_SITES cofiguration options
+                added GC.exorcise method
+        
+        * rubysig.h:  added STACK_WIPE_SITES cofiguration options
+                      when available, use gcc asm to optimize wipe_stack
+        
+        * version.h:  include STACK_WIPE_SITES options in MBARI release string
+
+        
+Sun Jan  4 20:15:36 2009  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  eliminated up_stk_extent(), wipe_stack in rb_thread_switch
+        
+        * gc.c: removed lev counter args, check stack pointer instead
+                streamlined SET_STACK_END and STACK_END, stack_length(), etc.
+                added TOP_FRAME to use gcc's builtin frame_address
+                optimized is_heap_pointer()
+                gc_mark_rest() does not need to copy entire mark_stack!
+                added set_stack_size() to properly hande RLIM_INFINITY
+                
+        * rubysig.h:  repaired broken pseudo preemptive thread switching
+                      removed rb_gc_malloc_increase & limit
+                      replaced buggy __stack_grown* with __stack_past* macros
+        
+
+Tue Dec 19 20:15:36 2008  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  added (Method|Proc)#(__line__|__file__) methods
+                   call ruby_set_current_source() before adding method nodes
+
+
+Tue Dec 17  4:15:36 2008  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  streamlined rb_thread_restore_context() to ensure O(1) time
+
+
+Tue Dec 15  9:15:36 2008  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  factored rb_eval() into many separate non-inlined
+                  functions to reduce the size of its stack frame when
+                  compiled with gcc.
+                  Factored callcc into 2 functions.
+
+
+Tue Dec 13  6:10:36 2008  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  update stack extent just before and after every setjmp
+
+        * gc.c:  replaced rb_gc_stress with gc_getlimit and setlimit
+                 update stack extent after every xmalloc and xrealloc
+                 export rb_gc_stack_grow_direction if not known at compile time
+                 removed dynamic adjustment of malloc_limit
+                 removed workaround for obsolete gcc 2.7.2.3 bug                 
+
+        * signal.h: don't try to clear stress after segsegv.  It's a too late.
+        
+        * rubysig.h:  CHECK_INTS clears ghost references off stack
+
+
+Tue Dec 12  6:11:36 2008  Brent Roman  <brent@mbari.org>
+
+        * eval.c:  exclude other thread's stack frames from current one
+
+        * gc.c:  STACK_LENGTH macro takes start parameter
+
+        * node.h: added stk_start pointer to ruby thread struct
+
+        * intern.h:  stack_length takes base pointer as parameter
+        
+
+Tue Dec  9  8:11:36 2008  Brent Roman  <brent@mbari.org>
+
+     * eval.c:  added Continuation.thread method
+        * cc_mark frees the continuation's stack if its thread is dead
+          avoids recursive gc that segfaults [see Dec 5th, 2007 ruby-core]
+
+        * added cast in PUSH_FRAME() to eliminate gcc 4.2 compiler warnings    
+                   
+        * THREAD_DATA() replaces rb_thread_check() in most contexts
+        
+        * rb_thread_check now complains when passed a Continuation
+          (no longer need redundant check in thgroup_add()
+        
+        * rb_callcc() assigns th->thread before scope_dup()
+          this avoids segfaults if this scope_dup() triggers a gc pass
+        
+
 Fri Aug  8 10:53:52 2008  Tanaka Akira  <akr@fsij.org>
 
 	* lib/resolv.rb: randomize source port and transaction id.
