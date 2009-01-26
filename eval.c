@@ -10475,6 +10475,11 @@ win32_set_exception_list(p)
 int rb_thread_pending = 0;
 
 VALUE rb_cThread;
+static VALUE rb_cFiber;
+static VALUE rb_cRootFiber;
+static VALUE rb_eFiberError;
+static rb_thread_t curr_fiber;
+static VALUE root_fiber;
 
 extern VALUE rb_last_status;
 
@@ -10867,6 +10872,7 @@ thread_free(th)
     rb_thread_t th;
 {
     stack_free(th);
+    if (th->fiber_return) thread_free(th->fiber_return);
     if (th->locals) st_free_table(th->locals);
     if (th->status != THREAD_KILLED) {
 	if (th->prev) th->prev->next = th->next;
@@ -12444,6 +12450,11 @@ rb_thread_group(thread)
     th->thgroup = thgroup_default;\
     th->locals = 0;\
     th->thread = 0;\
+    th->fiber_status = FIBER_NONE;\
+    th->fiber_value = Qnil;\
+    th->fiber_self = Qnil;\
+    th->fiber_return = 0;\
+    th->fiber_error = Qnil;\
     if (curr_thread == 0) {\
       th->sandbox = Qnil;\
     } else {\
@@ -13807,6 +13818,179 @@ rb_exec_recursive(func, obj, arg)
     }
 }
 
+static VALUE
+make_passing_arg(int argc, VALUE *argv)
+{
+  switch(argc) {
+    case 0:
+      return rb_ary_new2(0);
+    case 1:
+      return argv[0];
+    default:
+      return rb_ary_new4(argc, argv);
+  }
+}
+
+static VALUE
+rb_fiber_rescue(rb_thread_t arg, VALUE error)
+{
+  arg->fiber_error = error;
+  return Qnil;
+}
+
+static VALUE
+rb_fiber_init(VALUE self)
+{
+  if (!rb_block_given_p())
+    rb_raise(rb_eArgError, "new Fiber requires a block");
+
+  rb_thread_t fib;
+  Data_Get_Struct(self, rb_thread_t, fib);
+  fib->fiber_status = FIBER_CREATED;
+  fib->fiber_value = Qnil;
+
+  if (THREAD_SAVE_CONTEXT(fib)) {
+      // yield to passed in block
+      // make args, pass them into yield
+     fib->fiber_status = FIBER_RUNNING;
+     fib->fiber_value = rb_rescue(rb_yield, fib->fiber_value, rb_fiber_rescue, fib);
+     fib->fiber_status = FIBER_KILLED;
+     rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
+  }
+  return self;
+}
+
+static VALUE
+rb_fiber_resume(int argc, VALUE *argv, VALUE self)
+{
+  rb_thread_t fib, prev_fiber;
+  Data_Get_Struct(self, rb_thread_t, fib);
+
+  if (fib->fiber_status == FIBER_KILLED) {
+    rb_raise(rb_eFiberError, "dead fiber called");
+  }
+
+  if (fib->fiber_status == FIBER_RUNNING) {
+    rb_raise(rb_eFiberError, "double resume");
+  }
+
+  prev_fiber = curr_fiber;
+  if (!THREAD_SAVE_CONTEXT(fib->fiber_return)) {
+     fib->fiber_value = make_passing_arg(argc, argv);
+     curr_fiber = fib;
+     fib->fiber_status = FIBER_RUNNING;
+     rb_thread_restore_context(fib, RESTORE_NORMAL);
+  }
+
+  if (fib->fiber_status != FIBER_KILLED)
+    fib->fiber_status = FIBER_STOPPED;
+
+  curr_fiber = prev_fiber;
+
+  if (fib->fiber_error != Qnil) {
+    rb_exc_raise(fib->fiber_error);
+    fib->fiber_error = Qnil;
+  }
+
+  return fib->fiber_value;
+}
+
+static VALUE
+rb_fiber_yield(int argc, VALUE *argv, VALUE self)
+{
+  rb_thread_t fib;
+  Data_Get_Struct(self, rb_thread_t, fib);
+
+  if (!THREAD_SAVE_CONTEXT(fib)) {
+      fib->fiber_value = make_passing_arg(argc, argv);
+      rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
+  }
+
+  return fib->fiber_value;
+}
+
+static VALUE
+rb_fiber_s_current(VALUE klass)
+{
+  if (!curr_fiber)
+    return root_fiber;
+
+  return curr_fiber->fiber_self;
+}
+
+static VALUE
+rb_fiber_s_yield(int argc, VALUE *argv, VALUE self)
+{
+  if (!curr_fiber) {
+    rb_raise(rb_eFiberError, "can't yield from root fiber");
+  }
+
+  VALUE fib = curr_fiber->fiber_self;
+  if (fib == Qnil) {
+    rb_raise(rb_eFiberError, "not inside a fiber");
+  }
+  else {
+    return rb_fiber_yield(argc, argv, fib);
+  }
+}
+
+static VALUE
+rb_fiber_alive_p(VALUE self)
+{
+  rb_thread_t fib;
+  Data_Get_Struct(self, rb_thread_t, fib);
+  return fib->fiber_status > FIBER_KILLED;
+}
+
+static VALUE
+fiber_alloc(VALUE klass)
+{
+  rb_thread_t th = prep4callcc();
+  th->fiber_return = prep4callcc();
+  th->fiber_self = Data_Wrap_Struct(klass, thread_mark, thread_free, th);
+  return th->fiber_self;
+}
+
+static VALUE
+rb_root_fiber_resume(int argc, VALUE *argv, VALUE self)
+{
+  rb_raise(rb_eFiberError, "can't resume root fiber");
+}
+
+static VALUE
+rb_root_fiber_alloc(VALUE klass)
+{
+   return root_fiber;
+}
+
+static VALUE
+rb_root_fiber_init(VALUE self)
+{
+  return self;
+}
+
+void
+Init_Fiber()
+{
+  rb_cFiber = rb_define_class("Fiber", rb_cObject);
+  rb_define_alloc_func(rb_cFiber, fiber_alloc);
+  rb_eFiberError = rb_define_class("FiberError", rb_eStandardError);
+  rb_define_singleton_method(rb_cFiber, "yield", rb_fiber_s_yield, -1);
+  rb_define_method(rb_cFiber, "initialize", rb_fiber_init, 0);
+  rb_define_method(rb_cFiber, "resume", rb_fiber_resume, -1);
+  //rb_define_method(rb_cFiber, "transfer", rb_fiber_m_transfer, -1);
+  rb_define_method(rb_cFiber, "alive?", rb_fiber_alive_p, 0);
+  rb_define_singleton_method(rb_cFiber, "current", rb_fiber_s_current, 0);
+
+  rb_cRootFiber = rb_define_class("RootFiber", rb_cFiber);
+  rb_define_method(rb_cRootFiber, "initialize", rb_root_fiber_init, 0);
+  rb_define_alloc_func(rb_cRootFiber, rb_root_fiber_alloc);
+  rb_define_method(rb_cRootFiber, "resume", rb_root_fiber_resume, -1);
+
+  root_fiber = Data_Wrap_Struct(rb_cRootFiber, 0, 0, 0);
+  curr_fiber = NULL;
+}
+
 
 /*
  *  +Thread+ encapsulates the behavior of a thread of
@@ -13898,6 +14082,7 @@ Init_Thread()
     /* allocate main thread */
     main_thread = rb_thread_alloc(rb_cThread);
     curr_thread = main_thread->prev = main_thread->next = main_thread;
+    Init_Fiber();
 }
 
 /*
