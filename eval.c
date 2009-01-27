@@ -13494,7 +13494,7 @@ rb_fiber_init(self)
     rb_raise(rb_eArgError, "new Fiber requires a block");
 
   rb_thread_t fib;
-  Data_Get_Struct(self, rb_thread_t, fib);
+  Data_Get_Struct(self, struct rb_thread, fib);
 
   struct BLOCK *volatile saved_block = 0;
 
@@ -13581,7 +13581,7 @@ rb_fiber_resume(argc, argv, self)
     VALUE self;
 {
   rb_thread_t fib, prev_fiber;
-  Data_Get_Struct(self, rb_thread_t, fib);
+  Data_Get_Struct(self, struct rb_thread, fib);
 
   if (fib->fiber_status == FIBER_KILLED) {
     rb_raise(rb_eFiberError, "dead fiber called");
@@ -13623,7 +13623,7 @@ rb_fiber_yield(argc, argv, self)
     VALUE self;
 {
   rb_thread_t fib;
-  Data_Get_Struct(self, rb_thread_t, fib);
+  Data_Get_Struct(self, struct rb_thread, fib);
 
   if (!THREAD_SAVE_CONTEXT(fib)) {
     fib->fiber_value = make_passing_arg(argc, argv);
@@ -13667,7 +13667,7 @@ rb_fiber_alive_p(self)
     VALUE self;
 {
   rb_thread_t fib;
-  Data_Get_Struct(self, rb_thread_t, fib);
+  Data_Get_Struct(self, struct rb_thread, fib);
   return fib->fiber_status > FIBER_KILLED;
 }
 
