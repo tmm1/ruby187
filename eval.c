@@ -13493,7 +13493,7 @@ rb_fiber_init(self)
   if (!rb_block_given_p())
     rb_raise(rb_eArgError, "new Fiber requires a block");
 
-  rb_thread_t fib;
+  volatile rb_thread_t fib;
   Data_Get_Struct(self, struct rb_thread, fib);
 
   struct BLOCK *volatile saved_block = 0;
