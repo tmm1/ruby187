@@ -13496,8 +13496,6 @@ rb_fiber_init(self)
   volatile rb_thread_t fib;
   Data_Get_Struct(self, struct rb_thread, fib);
 
-  struct BLOCK *volatile saved_block = 0;
-
 #if STACK_GROW_DIRECTION > 0
   fib->stk_start = (VALUE *)ruby_frame;
 #elif STACK_GROW_DIRECTION < 0
@@ -13506,21 +13504,9 @@ rb_fiber_init(self)
   fib->stk_start = (VALUE *)(ruby_frame+((VALUE *)(&fib)<rb_gc_stack_start))
 #endif
 
-  if (ruby_block) { // dup current ruby_block, free all others
-    struct BLOCK dummy;
-
-    dummy.prev = ruby_block;
-    blk_copy_prev(&dummy);
-
-    saved_block = dummy.prev;
-
-    blk_free(saved_block->prev);
-    saved_block->prev = 0;
-  }
+  scope_dup(ruby_scope);
 
   struct tag *tag;
-
-  scope_dup(ruby_scope);
   for (tag=prot_tag; tag; tag=tag->prev) {
     if(tag->tag == PROT_THREAD || tag->tag == PROT_FIBER) break;
     scope_dup(tag->scope);
@@ -13528,10 +13514,17 @@ rb_fiber_init(self)
 
   if (THREAD_SAVE_CONTEXT(fib)) {
     // setup the fiber
+    struct BLOCK *volatile saved_block = 0;
+    struct BLOCK dummy;
+
+    // dup current ruby_block, free all others
+    dummy.prev = ruby_block;
+    blk_copy_prev(&dummy);
+    ruby_block = saved_block = dummy.prev;
+
     fib->fiber_status = FIBER_CREATED;
     fib->fiber_value = Qnil;
 
-    ruby_block = saved_block;
     ruby_frame->prev = top_frame;
     ruby_frame->tmp = 0;
 
@@ -13552,9 +13545,7 @@ rb_fiber_init(self)
     fib->fiber_error = ruby_errinfo;
     fib->fiber_status = FIBER_KILLED;
 
-    if (saved_block) {
-      blk_free(saved_block);
-    }
+    blk_free(saved_block);
 
     stack_free(fib);
     fib->stk_len = 0;
