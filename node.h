@@ -400,6 +400,14 @@ enum rb_thread_status {
 
 typedef struct rb_thread *rb_thread_t;
 
+enum rb_fiber_status {
+    FIBER_NONE,
+    FIBER_KILLED,
+    FIBER_CREATED,
+    FIBER_RUNNING,
+    FIBER_STOPPED,
+};
+
 struct rb_thread {
     rb_thread_t next, prev;
     rb_jmpbuf_t context;
@@ -461,6 +469,12 @@ struct rb_thread {
     VALUE thread;
 
     VALUE sandbox;
+
+    enum rb_fiber_status fiber_status;
+    VALUE fiber_error;
+    VALUE fiber_value;
+    VALUE fiber_self;
+    rb_thread_t fiber_return;
 };
 
 extern VALUE (*ruby_sandbox_save)_((rb_thread_t));
