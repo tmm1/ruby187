@@ -10646,11 +10646,10 @@ rb_thread_switch(n)
     (rb_thread_switch(ruby_setjmp(rb_thread_save_context(th), (th)->context)))
 
 NORETURN(static void rb_thread_restore_context _((rb_thread_t,int)));
-NORETURN(NOINLINE(static void rb_thread_restore_context_0(rb_thread_t,int,void*)));
-NORETURN(NOINLINE(static void stack_extend(rb_thread_t, int, VALUE *)));
+NORETURN(NOINLINE(static void rb_thread_restore_context_0(rb_thread_t,int)));
 
 static void
-rb_thread_restore_context_0(rb_thread_t th, int exit, void *vp)
+rb_thread_restore_context_0(rb_thread_t th, int exit)
 {
     static rb_thread_t tmp;
     static int ex;
@@ -10707,9 +10706,9 @@ static volatile int C(f), C(g), C(h), C(i), C(j);
 static volatile int C(k), C(l), C(m), C(n), C(o);
 static volatile int C(p), C(q), C(r), C(s), C(t);
 int rb_dummy_false = 0;
-NORETURN(NOINLINE(static void register_stack_extend(rb_thread_t, int, void *, VALUE *)));
+NORETURN(NOINLINE(static void register_stack_extend(rb_thread_t, int, VALUE *)));
 static void
-register_stack_extend(rb_thread_t th, int exit, void *vp, VALUE *curr_bsp)
+register_stack_extend(rb_thread_t th, int exit, VALUE *curr_bsp)
 {
     if (rb_dummy_false) {
         /* use registers as much as possible */
@@ -10723,52 +10722,68 @@ register_stack_extend(rb_thread_t th, int exit, void *vp, VALUE *curr_bsp)
         E(p) = E(q) = E(r) = E(s) = E(t) = 0;
     }
     if (curr_bsp < th->bstr_pos+th->bstr_len) {
-        register_stack_extend(th, exit, &exit, (VALUE*)rb_ia64_bsp());
+        register_stack_extend(th, exit, (VALUE*)rb_ia64_bsp());
     }
-    rb_thread_restore_context_0(th, exit, &exit);
+    rb_thread_restore_context_0(th, exit);
 }
 #undef C
 #undef E
 #endif
 
-# if defined(_MSC_VER) && _MSC_VER >= 1300
-__declspec(noinline) static void stack_extend(rb_thread_t, int, VALUE*);
-# endif
-static void
-stack_extend(rb_thread_t th, int exit, VALUE *addr_in_prev_frame)
-{
-#define STACK_PAD_SIZE 1024
-    VALUE space[STACK_PAD_SIZE];
-
-#if STACK_GROW_DIRECTION < 0
-    if (addr_in_prev_frame > th->stk_pos) stack_extend(th, exit, &space[0]);
-#elif STACK_GROW_DIRECTION > 0
-    if (addr_in_prev_frame < th->stk_pos + th->stk_len) stack_extend(th, exit, &space[STACK_PAD_SIZE-1]);
-#else
-    if (addr_in_prev_frame < rb_gc_stack_start) {
-        /* Stack grows downward */
-        if (addr_in_prev_frame > th->stk_pos) stack_extend(th, exit, &space[0]);
-    }
-    else {
-        /* Stack grows upward */
-        if (addr_in_prev_frame < th->stk_pos + th->stk_len) stack_extend(th, exit, &space[STACK_PAD_SIZE-1]);
-    }
-#endif
-#ifdef __ia64
-    register_stack_extend(th, exit, space, (VALUE*)rb_ia64_bsp());
-#else
-    rb_thread_restore_context_0(th, exit, space);
-#endif
-}
 
 static void
 rb_thread_restore_context(th, exit)
     rb_thread_t th;
     int exit;
 {
+    VALUE *pos = th->stk_start;
+
+#if HAVE_ALLOCA  /* use alloca to grow stack in O(1) time */
     VALUE v;
+    volatile VALUE *space;
+
     if (!th->stk_ptr) rb_bug("unsaved context");
-    stack_extend(th, exit, &v);
+#  if !STACK_GROW_DIRECTION  /* unknown at compile time */
+    if (rb_gc_stack_grow_direction < 0) {
+#  endif
+#  if STACK_GROW_DIRECTION <= 0
+      pos -= th->stk_len;
+      if (&v > pos) space=ALLOCA_N(VALUE, &v-pos);
+#  endif
+#  if !STACK_GROW_DIRECTION
+    }else
+#  endif
+#if STACK_GROW_DIRECTION >= 0  /* stack grows upward */
+      if (&v < pos + th->stk_len) space=ALLOCA_N(VALUE, pos+th->stk_len - &v);
+#  endif
+
+#else  /* recursive O(n/1024) if extending stack > 1024 VALUEs */
+
+    volatile VALUE v[1023];
+
+#  if !STACK_GROW_DIRECTION  /* unknown at compile time */
+    if (rb_gc_stack_grow_direction < 0) {
+#  endif
+#  if STACK_GROW_DIRECTION <= 0
+      pos -= th->stk_len;
+      if (v > pos) rb_thread_restore_context(th, exit);
+#  endif
+#  if !STACK_GROW_DIRECTION
+    }else
+#  endif
+#  if STACK_GROW_DIRECTION >= 0  /* stack grows upward */
+      if (v < pos + th->stk_len) rb_thread_restore_context(th, exit);
+#  endif
+    if (!th->stk_ptr) rb_bug("unsaved context");
+    
+#endif  /* stack now extended */
+
+
+#ifdef __ia64
+    register_stack_extend(th, exit, (VALUE*)rb_ia64_bsp());
+#else
+    rb_thread_restore_context_0(th, exit);
+#endif
 }
 
 static void
