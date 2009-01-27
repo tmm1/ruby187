@@ -2,8 +2,8 @@
 
   node.h -
 
-  $Author: shyouhei $
-  $Date: 2008-07-07 15:17:24 +0900 (Mon, 07 Jul 2008) $
+  $Author: brent $
+  $Date: 2008/12/13 05:02:23 $
   created at: Fri May 28 15:14:02 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -417,10 +417,8 @@ struct rb_thread {
 
     VALUE result;
 
-    long   stk_len;
-    long   stk_max;
-    VALUE *stk_ptr;
-    VALUE *stk_pos;
+    long   stk_len, stk_max;
+    VALUE *stk_ptr, *stk_pos, *stk_start;
 #ifdef __ia64
     long   bstr_len;
     long   bstr_max;
