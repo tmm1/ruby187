@@ -1026,6 +1026,7 @@ static struct tag *prot_tag;
 #define PROT_LOOP   INT2FIX(1)	/* 3 */
 #define PROT_LAMBDA INT2FIX(2)	/* 5 */
 #define PROT_YIELD  INT2FIX(3)	/* 7 */
+#define PROT_FIBER  INT2FIX(4)	/* 9 */
 
 #define EXEC_TAG()    ruby_setjmp(((void)0), prot_tag->buf)
 
@@ -4856,6 +4857,9 @@ return_jump(retval)
 	    tt->retval = retval;
 	    JUMP_TAG(TAG_RETURN);
 	}
+	if (tt->tag == PROT_FIBER) {
+            localjump_error("unexpected return", retval, TAG_RETURN);
+	}
 	if (tt->tag == PROT_THREAD) {
 	    rb_raise(rb_eThreadError, "return can't jump across threads");
 	}
@@ -4877,6 +4881,7 @@ break_jump(retval)
 	  case PROT_YIELD:
 	  case PROT_LOOP:
 	  case PROT_LAMBDA:
+	  case PROT_FIBER:
 	    tt->dst = (VALUE)tt->frame->uniq;
 	    tt->retval = retval;
 	    JUMP_TAG(TAG_BREAK);
@@ -4906,6 +4911,7 @@ next_jump(retval)
 	  case PROT_LOOP:
 	  case PROT_LAMBDA:
 	  case PROT_FUNC:
+	  case PROT_FIBER:
 	    tt->dst = (VALUE)tt->frame->uniq;
 	    tt->retval = retval;
 	    JUMP_TAG(TAG_NEXT);
@@ -5141,7 +5147,7 @@ rb_yield_0(val, self, klass, flags, avalue)
 		    tt->retval = result;
 		    JUMP_TAG(TAG_BREAK);
 		}
-                if (tt->tag == PROT_THREAD) break;
+                if (tt->tag == PROT_THREAD || tt->tag == PROT_FIBER) break;
 		tt = tt->prev;
 	    }
 	    proc_jump_error(TAG_BREAK, result);
@@ -6573,7 +6579,7 @@ eval(self, src, scope, file, line)
 
 	    scope_dup(ruby_scope);
 	    for (tag=prot_tag; tag; tag=tag->prev) {
-                if (tag->tag == PROT_THREAD) break;
+                if (tag->tag == PROT_THREAD || tag->tag == PROT_FIBER) break;
 		scope_dup(tag->scope);
 	    }
 	    for (vars = ruby_dyna_vars; vars; vars = vars->next) {
@@ -10408,7 +10414,9 @@ thread_mark(th)
 
     /* mark data in copied stack */
     if (th == curr_thread) return;
+    if (th == curr_fiber) return;
     if (th->status == THREAD_KILLED) return;
+    if (th->fiber_status == FIBER_KILLED) return;
     if (th->stk_len == 0) return;  /* stack not active, no need to mark. */
     if (th->stk_ptr) {
 	rb_gc_mark_locations(th->stk_ptr, th->stk_ptr+th->stk_len);
@@ -10506,6 +10514,22 @@ rb_gc_abort_threads()
 	    rb_gc_mark(th->thread);
 	}
     } END_FOREACH_FROM(main_thread, th);
+}
+
+static inline void
+stack_free(th)
+    rb_thread_t th;
+{
+    if (th->stk_ptr) {
+      free(th->stk_ptr);
+      th->stk_ptr = 0;
+    }
+#ifdef __ia64
+    if (th->bstr_ptr) {
+      free(th->bstr_ptr);
+      th->bstr_ptr = 0;
+    }
+#endif
 }
 
 static void
@@ -13463,15 +13487,6 @@ make_passing_arg(argc, argv)
 }
 
 static VALUE
-rb_fiber_rescue(arg, error)
-    rb_thread_t arg;
-    VALUE error;
-{
-  arg->fiber_error = error;
-  return Qnil;
-}
-
-static VALUE
 rb_fiber_init(self)
     VALUE self;
 {
@@ -13480,15 +13495,82 @@ rb_fiber_init(self)
 
   rb_thread_t fib;
   Data_Get_Struct(self, rb_thread_t, fib);
-  fib->fiber_status = FIBER_CREATED;
-  fib->fiber_value = Qnil;
+
+  struct BLOCK *volatile saved_block = 0;
+
+#if STACK_GROW_DIRECTION > 0
+  fib->stk_start = (VALUE *)ruby_frame;
+#elif STACK_GROW_DIRECTION < 0
+  fib->stk_start = (VALUE *)(ruby_frame+1);
+#else
+  fib->stk_start = (VALUE *)(ruby_frame+((VALUE *)(&fib)<rb_gc_stack_start))
+#endif
+
+  if (ruby_block) { // dup current ruby_block, free all others
+    struct BLOCK dummy;
+
+    dummy.prev = ruby_block;
+    blk_copy_prev(&dummy);
+
+    saved_block = dummy.prev;
+
+    blk_free(saved_block->prev);
+    saved_block->prev = 0;
+  }
+
+  struct tag *tag;
+
+  scope_dup(ruby_scope);
+  for (tag=prot_tag; tag; tag=tag->prev) {
+    if(tag->tag == PROT_THREAD || tag->tag == PROT_FIBER) break;
+    scope_dup(tag->scope);
+  }
 
   if (THREAD_SAVE_CONTEXT(fib)) {
-     fib->fiber_status = FIBER_RUNNING;
-     fib->fiber_value = rb_rescue(rb_yield, fib->fiber_value, rb_fiber_rescue, fib);
-     fib->fiber_status = FIBER_KILLED;
-     rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
+    // setup the fiber
+    fib->fiber_status = FIBER_CREATED;
+    fib->fiber_value = Qnil;
+
+    ruby_block = saved_block;
+    ruby_frame->prev = top_frame;
+    ruby_frame->tmp = 0;
+
+    // fiber is ready, jump back and return it
+    if (!THREAD_SAVE_CONTEXT(fib))
+      rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
+
+    // start the fiber
+    int state;
+
+    PUSH_TAG(PROT_FIBER);
+    if ((state = EXEC_TAG()) == 0) {
+      fib->fiber_status = FIBER_RUNNING;
+      fib->fiber_value = rb_yield(fib->fiber_value);
+    }
+    POP_TAG();
+
+    fib->fiber_error = ruby_errinfo;
+    fib->fiber_status = FIBER_KILLED;
+
+    if (saved_block) {
+      blk_free(saved_block);
+    }
+
+    stack_free(fib);
+    fib->stk_len = 0;
+    fib->stk_max = 0;
+
+    rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
   }
+
+  // jump into the fiber initially to set it up
+  if (!THREAD_SAVE_CONTEXT(fib->fiber_return))
+    rb_thread_restore_context(fib, RESTORE_NORMAL);
+
+  stack_free(fib->fiber_return);
+  fib->fiber_return->stk_max = 0;
+  fib->fiber_return->stk_len = 0;
+
   return self;
 }
 
@@ -13517,6 +13599,10 @@ rb_fiber_resume(argc, argv, self)
      rb_thread_restore_context(fib, RESTORE_NORMAL);
   }
 
+  stack_free(fib->fiber_return);
+  fib->fiber_return->stk_max = 0;
+  fib->fiber_return->stk_len = 0;
+
   if (fib->fiber_status != FIBER_KILLED)
     fib->fiber_status = FIBER_STOPPED;
 
@@ -13540,8 +13626,8 @@ rb_fiber_yield(argc, argv, self)
   Data_Get_Struct(self, rb_thread_t, fib);
 
   if (!THREAD_SAVE_CONTEXT(fib)) {
-      fib->fiber_value = make_passing_arg(argc, argv);
-      rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
+    fib->fiber_value = make_passing_arg(argc, argv);
+    rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
   }
 
   return fib->fiber_value;
@@ -13589,8 +13675,9 @@ static VALUE
 fiber_alloc(klass)
     VALUE klass;
 {
-  rb_thread_t fib = prep4callcc();
-  fib->fiber_return = prep4callcc();
+  rb_thread_t fib;
+  THREAD_ALLOC(fib);
+  THREAD_ALLOC(fib->fiber_return);
   fib->fiber_self = Data_Wrap_Struct(klass, thread_mark, thread_free, fib);
   return fib->fiber_self;
 }
@@ -13822,7 +13909,7 @@ rb_f_throw(argc, argv)
     tag = ID2SYM(rb_to_id(tag));
 
     while (tt) {
-	if (tt->tag == tag) {
+	if (tt->tag == tag || tt->tag == PROT_FIBER) {
 	    tt->dst = tag;
 	    tt->retval = value;
 	    break;
@@ -13834,7 +13921,7 @@ rb_f_throw(argc, argv)
 	}
 	tt = tt->prev;
     }
-    if (!tt) {
+    if (!tt || tt->tag == PROT_FIBER) {
 	rb_name_error(SYM2ID(tag), "uncaught throw `%s'", rb_id2name(SYM2ID(tag)));
     }
     rb_trap_restore_mask();
