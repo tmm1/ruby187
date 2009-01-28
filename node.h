@@ -472,6 +472,7 @@ struct rb_thread {
     VALUE fiber_error;
     VALUE fiber_value;
     VALUE fiber_self;
+    VALUE fiber_thread;
     rb_thread_t fiber_return;
 };
 

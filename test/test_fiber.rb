@@ -62,13 +62,10 @@ class TestFiber < Test::Unit::TestCase
     assert_raise(ArgumentError){
       Fiber.new # Fiber without block
     }
-=begin
-    # XXX too hard!
     assert_raise(FiberError){
       f = Fiber.new{}
       Thread.new{f.resume}.join # Fiber yielding across thread
     }
-=end
     assert_raise(FiberError){
       f = Fiber.new{}
       f.resume

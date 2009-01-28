@@ -13496,6 +13496,8 @@ rb_fiber_init(self)
   volatile rb_thread_t fib;
   Data_Get_Struct(self, struct rb_thread, fib);
 
+  fib->fiber_thread = curr_thread->thread;
+
 #if STACK_GROW_DIRECTION > 0
   fib->stk_start = (VALUE *)ruby_frame;
 #elif STACK_GROW_DIRECTION < 0
@@ -13580,6 +13582,10 @@ rb_fiber_resume(argc, argv, self)
 
   if (fib->fiber_status == FIBER_RUNNING) {
     rb_raise(rb_eFiberError, "double resume");
+  }
+
+  if (fib->fiber_thread != curr_thread->thread) {
+    rb_raise(rb_eFiberError, "fiber called across threads");
   }
 
   prev_fiber = curr_fiber;
