@@ -10412,6 +10412,9 @@ thread_mark(th)
     rb_gc_mark(th->thgroup);
     rb_gc_mark_maybe(th->sandbox);
 
+    if (th->fiber_return) thread_mark(th->fiber_return);
+    rb_gc_mark_maybe(th->fiber_value);
+
     /* mark data in copied stack */
     if (th == curr_thread) return;
     if (th == curr_fiber) return;
@@ -10523,6 +10526,8 @@ stack_free(th)
     if (th->stk_ptr) {
       free(th->stk_ptr);
       th->stk_ptr = 0;
+      th->stk_max = 0;
+      th->stk_len = 0;
     }
 #ifdef __ia64
     if (th->bstr_ptr) {
@@ -13506,23 +13511,29 @@ rb_fiber_init(self)
   fib->stk_start = (VALUE *)(ruby_frame+((VALUE *)(&fib)<rb_gc_stack_start))
 #endif
 
-  scope_dup(ruby_scope);
-
-  struct tag *tag;
-  for (tag=prot_tag; tag; tag=tag->prev) {
-    if(tag->tag == PROT_THREAD || tag->tag == PROT_FIBER) break;
-    scope_dup(tag->scope);
-  }
-
   if (THREAD_SAVE_CONTEXT(fib)) {
     // setup the fiber
     struct BLOCK *volatile saved_block = 0;
     struct BLOCK dummy;
+    struct RVarmap *vars;
+    struct tag *tag;
 
     // dup current ruby_block, free all others
     dummy.prev = ruby_block;
     blk_copy_prev(&dummy);
     ruby_block = saved_block = dummy.prev;
+
+    scope_dup(ruby_scope);
+
+    for (tag=prot_tag; tag; tag=tag->prev) {
+      if(tag->tag == PROT_THREAD || tag->tag == PROT_FIBER) break;
+      scope_dup(tag->scope);
+    }
+
+    for (vars = ruby_dyna_vars; vars; vars = vars->next) {
+      if (FL_TEST(vars, DVAR_DONT_RECYCLE)) break;
+      FL_SET(vars, DVAR_DONT_RECYCLE);
+    }
 
     fib->fiber_status = FIBER_CREATED;
     fib->fiber_value = Qnil;
@@ -13550,8 +13561,6 @@ rb_fiber_init(self)
     blk_free(saved_block);
 
     stack_free(fib);
-    fib->stk_len = 0;
-    fib->stk_max = 0;
 
     rb_thread_restore_context(fib->fiber_return, RESTORE_NORMAL);
   }
@@ -13561,8 +13570,6 @@ rb_fiber_init(self)
     rb_thread_restore_context(fib, RESTORE_NORMAL);
 
   stack_free(fib->fiber_return);
-  fib->fiber_return->stk_max = 0;
-  fib->fiber_return->stk_len = 0;
 
   return self;
 }
@@ -13597,8 +13604,6 @@ rb_fiber_resume(argc, argv, self)
   }
 
   stack_free(fib->fiber_return);
-  fib->fiber_return->stk_max = 0;
-  fib->fiber_return->stk_len = 0;
 
   if (fib->fiber_status != FIBER_KILLED)
     fib->fiber_status = FIBER_STOPPED;
