@@ -10412,7 +10412,7 @@ thread_mark(th)
     rb_gc_mark(th->thgroup);
     rb_gc_mark_maybe(th->sandbox);
 
-    if (th->fiber_return) thread_mark(th->fiber_return);
+    if (th->fiber_return && th->fiber_return->stk_ptr) thread_mark(th->fiber_return);
     rb_gc_mark_maybe(th->fiber_value);
 
     /* mark data in copied stack */
