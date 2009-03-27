@@ -215,6 +215,10 @@ int _setjmp(), _longjmp();
 
 #include <sys/stat.h>
 
+#ifdef ENABLE_DTRACE
+#include "dtrace.h"
+#endif
+
 VALUE rb_cProc;
 VALUE rb_cBinding;
 static VALUE proc_invoke _((VALUE,VALUE,VALUE,VALUE));
@@ -3044,6 +3048,11 @@ rb_eval(self, n)
 	RETURN(Qfalse);
 
       case NODE_IF:
+ 	#ifdef ENABLE_DTRACE
+ 	if (RUBY_LINE_ENABLED())
+ 	    if (ruby_current_node && ruby_current_node->nd_file)
+ 		RUBY_LINE(ruby_current_node->nd_file, nd_line(ruby_current_node));
+ 	#endif
 	if (RTEST(rb_eval(self, node->nd_cond))) {
 	    EXEC_EVENT_HOOK(RUBY_EVENT_LINE, node, self,
 			    ruby_frame->last_func,
@@ -3065,6 +3074,11 @@ rb_eval(self, n)
 	    if (nd_type(node) != NODE_WHEN) goto again;
 	    tag = node->nd_head;
 	    while (tag) {
+		#ifdef ENABLE_DTRACE
+		if (RUBY_LINE_ENABLED())
+		    if (ruby_current_node && ruby_current_node->nd_file)
+			RUBY_LINE(ruby_current_node->nd_file, nd_line(ruby_current_node));
+		#endif
 		EXEC_EVENT_HOOK(RUBY_EVENT_LINE, tag, self,
 				ruby_frame->last_func,
 				ruby_frame->last_class);
@@ -3106,6 +3120,11 @@ rb_eval(self, n)
 		}
 		tag = node->nd_head;
 		while (tag) {
+		    #ifdef ENABLE_DTRACE
+		    if (RUBY_LINE_ENABLED())
+		        if (ruby_current_node && ruby_current_node->nd_file)
+			    RUBY_LINE(ruby_current_node->nd_file, nd_line(ruby_current_node));
+		    #endif
 		    EXEC_EVENT_HOOK(RUBY_EVENT_LINE, tag, self,
 				    ruby_frame->last_func,
 				    ruby_frame->last_class);
@@ -3326,6 +3345,11 @@ rb_eval(self, n)
 		rescuing = -1;
 		while (resq) {
 		    ruby_current_node = resq;
+		    #ifdef ENABLE_DTRACE
+		    if (RUBY_RESCUE_ENABLED())
+		        if (ruby_current_node && ruby_current_node->nd_file)
+			RUBY_RESCUE(ruby_current_node->nd_file, nd_line(ruby_current_node));
+		    #endif
 		    if (handle_rescue(self, resq)) {
 			state = 0;
 			rescuing = 1;
@@ -4144,6 +4168,11 @@ rb_eval(self, n)
 	break;
 
       case NODE_NEWLINE:
+	#ifdef ENABLE_DTRACE
+	if (RUBY_LINE_ENABLED())
+	    if (ruby_current_node && ruby_current_node->nd_file)
+		RUBY_LINE(ruby_current_node->nd_file, nd_line(ruby_current_node));
+	#endif
 	EXEC_EVENT_HOOK(RUBY_EVENT_LINE, node, self, 
 			ruby_frame->last_func,
 			ruby_frame->last_class);
@@ -4622,6 +4651,10 @@ rb_longjmp(tag, mesg)
 
     rb_trap_restore_mask();
     if (tag != TAG_FATAL) {
+	#ifdef ENABLE_DTRACE
+	if (RUBY_RAISE_ENABLED())
+	    RUBY_RAISE(rb_obj_classname(ruby_errinfo), ruby_sourcefile, ruby_sourceline);
+	#endif
 	EXEC_EVENT_HOOK(RUBY_EVENT_RAISE, ruby_current_node,
 			ruby_frame->self,
 			ruby_frame->last_func,
@@ -5885,6 +5918,13 @@ rb_call0(klass, recv, id, oid, argc, argv, body, flags)
 		rb_bug("bad argc (%d) specified for `%s(%s)'",
 		       len, rb_class2name(klass), rb_id2name(id));
 	    }
+    	    #ifdef ENABLE_DTRACE
+	    if (RUBY_FUNCTION_ENTRY_ENABLED()) {
+	    	    char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+		    if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+			RUBY_FUNCTION_ENTRY(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+	    }
+	    #endif
 	    if (event_hooks) {
 		int state;
 
@@ -5903,6 +5943,13 @@ rb_call0(klass, recv, id, oid, argc, argv, body, flags)
 	    else {
 		result = call_cfunc(body->nd_cfnc, recv, len, argc, argv);
 	    }
+	    #ifdef ENABLE_DTRACE
+    	    if (RUBY_FUNCTION_RETURN_ENABLED()) {
+	        char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+	        if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+	            RUBY_FUNCTION_RETURN(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+	    }
+	    #endif
 	}
 	break;
 
@@ -5930,12 +5977,26 @@ rb_call0(klass, recv, id, oid, argc, argv, body, flags)
 
       case NODE_BMETHOD:
 	ruby_frame->flags |= FRAME_DMETH;
+	#ifdef ENABLE_DTRACE
+	if (RUBY_FUNCTION_ENTRY_ENABLED()) {
+		char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+		if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+	            RUBY_FUNCTION_ENTRY(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+	 }
+	#endif
 	if (event_hooks) {
 	    struct BLOCK *data;
 	    Data_Get_Struct(body->nd_cval, struct BLOCK, data);
 	    EXEC_EVENT_HOOK(RUBY_EVENT_CALL, data->body, recv, id, klass);
 	}
 	result = proc_invoke(body->nd_cval, rb_ary_new4(argc, argv), recv, klass);
+	#ifdef ENABLE_DTRACE
+	 if (RUBY_FUNCTION_RETURN_ENABLED()) {
+	    char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+	    if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+	        RUBY_FUNCTION_RETURN(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+	}
+	#endif
 	if (event_hooks) {
 	    EXEC_EVENT_HOOK(RUBY_EVENT_RETURN, ruby_current_node, recv, id, klass);
 	}
@@ -6049,6 +6110,13 @@ rb_call0(klass, recv, id, oid, argc, argv, body, flags)
 		    }
 		    ruby_frame->argc = i;
 		}
+		#ifdef ENABLE_DTRACE
+		if (RUBY_FUNCTION_ENTRY_ENABLED()) {
+			char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+			if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+		            RUBY_FUNCTION_ENTRY(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+		 }
+		#endif
 		if (event_hooks) {
 		    EXEC_EVENT_HOOK(RUBY_EVENT_CALL, b2, recv, id, klass);
 		}
@@ -6059,6 +6127,13 @@ rb_call0(klass, recv, id, oid, argc, argv, body, flags)
 		state = 0;
 	    }
 	    POP_TAG();
+	    #ifdef ENABLE_DTRACE
+	     if (RUBY_FUNCTION_RETURN_ENABLED()) {
+		char *classname = rb_class2name(klass), *methodname = rb_id2name(id);
+		if (ruby_current_node && ruby_current_node->nd_file && classname && methodname)
+	 	    RUBY_FUNCTION_RETURN(classname, methodname, ruby_current_node->nd_file, nd_line(ruby_current_node));
+	    }
+	    #endif
 	    if (event_hooks) {
 		EXEC_EVENT_HOOK(RUBY_EVENT_RETURN, ruby_current_node, recv, id, klass);
 	    }

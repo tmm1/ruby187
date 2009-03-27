@@ -89,6 +89,9 @@ ASFLAGS       = @ASFLAGS@
 OBJEXT        = @OBJEXT@
 MANTYPE	      = @MANTYPE@
 
+DTRACE_OBJS   = @DTRACE_OBJS@
+DTRACE_HEADER = @DTRACE_HEADER@
+
 INSTALLED_LIST= .installed.list
 #### End of variables
 
@@ -101,11 +104,11 @@ all:
 
 miniruby$(EXEEXT):
 		@$(RM) $@
-		$(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(MAINOBJ) $(MINIOBJS) $(LIBRUBY_A) $(LIBS) $(OUTFLAG)$@
+		$(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(MAINOBJ) $(MINIOBJS) $(LIBRUBY_A) $(DTRACE_OBJS) $(LIBS) $(OUTFLAG)$@
 
 $(PROGRAM):
 		@$(RM) $@
-		$(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(LIBS) $(OUTFLAG)$@
+		$(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(DTRACE_OBJS) $(LIBS) $(OUTFLAG)$@
 
 # We must `rm' the library each time this rule is invoked because "updating" a
 # MAB library on Apple/NeXT (see --enable-fat-binary in configure) is not
@@ -117,7 +120,7 @@ $(LIBRUBY_A):
 
 $(LIBRUBY_SO):
 		@-$(PRE_LIBRUBY_UPDATE)
-		$(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(OUTFLAG)$@
+		$(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(DTRACE_OBJS) $(SOLIBS) $(OUTFLAG)$@
 		@-$(MINIRUBY) -e 'ARGV.each{|link| File.delete link if File.exist? link; \
 						  File.symlink "$(LIBRUBY_SO)", link}' \
 				$(LIBRUBY_ALIASES) || true
@@ -184,6 +187,9 @@ distclean-local::
 
 ext/extinit.$(OBJEXT): ext/extinit.c $(SETUP)
 	$(CC) $(CFLAGS) $(XCFLAGS) $(CPPFLAGS) $(OUTFLAG)$@ -c ext/extinit.c
+
+$(DTRACE_HEADER): dtrace.d $(OBJS)
+	/usr/sbin/dtrace -h -s dtrace.d
 
 update-rubyspec: 
 	if [ -d $(srcdir)/rubyspec ]; then \

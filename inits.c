@@ -46,6 +46,7 @@ void Init_Struct _((void));
 void Init_Time _((void));
 void Init_var_tables _((void));
 void Init_version _((void));
+void Init_Tracer _((void));
 
 void
 rb_call_inits()
@@ -83,4 +84,5 @@ rb_call_inits()
     Init_Enumerator();
     Init_marshal();
     Init_version();
+    Init_Tracer();
 }

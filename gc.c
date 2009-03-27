@@ -30,6 +30,12 @@
 #include <sys/resource.h>
 #endif
 
+#ifdef ENABLE_DTRACE
+#include <sys/sdt.h>
+#include "dtrace.h"
+#endif
+
+
 #if defined _WIN32 || defined __CYGWIN__
 #include <windows.h>
 #endif
@@ -1214,6 +1220,11 @@ obj_free(obj)
 	break;
     }
 
+   #ifdef ENABLE_DTRACE
+   if (RUBY_OBJECT_FREE_ENABLED())
+      RUBY_OBJECT_FREE(rb_class2name(CLASS_OF(obj)));
+   #endif
+
     if (FL_TEST(obj, FL_EXIVAR)) {
 	rb_free_generic_ivar((VALUE)obj);
     }
@@ -1374,6 +1385,12 @@ garbage_collect()
 {
     struct gc_list *list;
     struct FRAME * volatile frame; /* gcc 2.7.2.3 -O2 bug??  */
+
+    #ifdef ENABLE_DTRACE
+    if (RUBY_GC_BEGIN_ENABLED())
+       RUBY_GC_BEGIN();
+    #endif
+
     jmp_buf save_regs_gc_mark;
     SET_STACK_END;
 
@@ -1466,6 +1483,11 @@ garbage_collect()
     } while (!MARK_STACK_EMPTY);
 
     gc_sweep();
+
+    #ifdef ENABLE_DTRACE
+    if (RUBY_GC_END_ENABLED())
+	RUBY_GC_END();
+    #endif
 }
 
 void

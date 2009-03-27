@@ -20,6 +20,11 @@
 #include <ctype.h>
 #include <math.h>
 
+#ifdef ENABLE_DTRACE
+#include "dtrace.h"
+#include "node.h"
+#endif
+
 VALUE rb_mKernel;
 VALUE rb_cObject;
 VALUE rb_cModule;
@@ -1603,7 +1608,25 @@ rb_obj_alloc(klass)
     if (FL_TEST(klass, FL_SINGLETON)) {
 	rb_raise(rb_eTypeError, "can't create instance of virtual class");
     }
+
+    #ifdef ENABLE_DTRACE
+    if (RUBY_OBJECT_CREATE_START_ENABLED()) {
+	char *file = ruby_current_node == NULL ? "" : ruby_current_node->nd_file;
+	int   line = ruby_current_node == NULL ? 0  : nd_line(ruby_current_node);
+	RUBY_OBJECT_CREATE_START(rb_class2name(klass), file, line);
+    }
+    #endif
+
     obj = rb_funcall(klass, ID_ALLOCATOR, 0, 0);
+
+    #ifdef ENABLE_DTRACE
+    if (RUBY_OBJECT_CREATE_DONE_ENABLED()) {
+	char *file = ruby_current_node == NULL ? "" : ruby_current_node->nd_file;
+	int   line = ruby_current_node == NULL ? 0  : nd_line(ruby_current_node);
+	RUBY_OBJECT_CREATE_DONE(rb_class2name(klass), file, line);
+    }
+    #endif
+
     if (rb_obj_class(obj) != rb_class_real(klass)) {
 	rb_raise(rb_eTypeError, "wrong instance allocation");
     }

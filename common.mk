@@ -55,6 +55,7 @@ OBJS	      = array.$(OBJEXT) \
 		string.$(OBJEXT) \
 		struct.$(OBJEXT) \
 		time.$(OBJEXT) \
+		tracer.$(OBJEXT) \
 		util.$(OBJEXT) \
 		variable.$(OBJEXT) \
 		version.$(OBJEXT) \
@@ -84,9 +85,11 @@ prog: $(PROGRAM) $(WPROGRAM)
 
 miniruby$(EXEEXT): config.status $(LIBRUBY_A) $(MAINOBJ) $(MINIOBJS) $(OBJS) $(DMYEXT)
 
-$(PROGRAM): $(LIBRUBY) $(MAINOBJ) $(OBJS) $(EXTOBJS) $(SETUP) $(PREP)
+$(PROGRAM): $(LIBRUBY) $(MAINOBJ) $(OBJS) $(EXTOBJS) $(DTRACE_OBJS) $(SETUP) $(PREP)
 
-$(LIBRUBY_A):	$(OBJS) $(DMYEXT) $(ARCHFILE)
+$(LIBRUBY_A):	$(OBJS) $(DMYEXT) $(ARCHFILE) $(DTRACE_OBJS)
+
+$(OBJS): $(DTRACE_HEADER)
 
 $(LIBRUBY_SO):	$(OBJS) $(DLDOBJS) $(LIBRUBY_A) $(PREP) $(LIBRUBY_SO_UPDATE)
 
@@ -279,7 +282,7 @@ clear-installed-list:
 
 clean: clean-ext clean-local
 clean-local::
-	@$(RM) $(OBJS) $(MINIOBJS) $(MAINOBJ) $(LIBRUBY_A) $(LIBRUBY_SO) $(LIBRUBY) $(LIBRUBY_ALIASES)
+	@$(RM) $(OBJS) $(DTRACE_HEADER) $(DTRACE_OBJS) $(MINIOBJS) $(MAINOBJ) $(LIBRUBY_A) $(LIBRUBY_SO) $(LIBRUBY) $(LIBRUBY_ALIASES)
 	@$(RM) $(PROGRAM) $(WPROGRAM) miniruby$(EXEEXT) dmyext.$(OBJEXT) $(ARCHFILE) .*.time
 	@$(RM) y.tab.c y.output
 clean-ext:
